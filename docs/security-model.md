@@ -9,3 +9,5 @@ Secrets use redacted fingerprints and are never validated against unrelated or t
 Application passwords use Argon2id. Sessions use random opaque tokens stored only as SHA-256 digests, expire, support logout/revocation, and use Secure/HttpOnly/SameSite cookies. Cookie-authenticated mutations require a CSRF token. Failed logins trigger a temporary lock. Admin, analyst, and viewer roles enforce API actions.
 
 Structured logs redact password, authorization, cookie, token, secret, and API-key fields. Runtime database and Metabase secrets are outside source control with restrictive filesystem permissions.
+
+Scanner cookie evidence records names and security attributes only. Cookie values are retained solely in the ephemeral in-memory response snapshot needed by the active scan and are redacted before response headers or observations are persisted.

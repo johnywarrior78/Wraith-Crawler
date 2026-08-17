@@ -1,6 +1,6 @@
 # Testing
 
-The local suite covers URL/scope validation, special-character database URLs, no default password, Argon2id/RBAC/CSRF/lock behavior, schema creation, inventories, aggregation/deduplication, priority, attack-path classification, runtime failure isolation, timeouts, malformed JSONL, HTTPX identity, Nuclei origin deduplication, Nikto fallback taxonomy, API reads, and PDF/Excel content.
+The local suite covers URL/scope validation, special-character database URLs, no default password, Argon2id/RBAC/CSRF/lock behavior, schema creation, inventories, aggregation/deduplication, priority, attack-path classification, runtime failure isolation, timeouts, malformed JSONL, HTTPX identity, Nuclei origin deduplication, Nikto fallback taxonomy, session-cookie value redaction and control checks, CMS multi-signal/false-positive fixtures, directory-index signatures and bounds, API reads, and PDF/Excel content.
 
 ```bash
 pytest

@@ -2,7 +2,15 @@
 
 Plugins declare required/produced data capabilities, profiles, external-tool identity, OWASP/CWE mappings, automation level, and validation strength. States are `completed`, `partial`, `failed`, `timed_out`, `not_applicable`, and `blocked`; failures use the structured reason taxonomy in `enums.py`.
 
-Built-in capabilities include seed HTTP validation, TLS, HTML/endpoint/forms/JavaScript discovery, JavaScript retrieval and deterministic reference extraction, security headers, cookies, CORS behavior, HTTP methods, technology/CMS fingerprints, directory/error/API/debug exposure, robots/sitemaps, curated sensitive files, source maps, known-format secrets, parameter risk queues, GraphQL introspection, WebSocket discovery, open-redirect validation, and safe traversal/IDOR/BOLA/SSRF manual-review candidates.
+Built-in capabilities include seed HTTP validation, TLS, HTML/endpoint/forms/JavaScript discovery, JavaScript retrieval and deterministic reference extraction, security headers, session-cookie analysis, CORS behavior, HTTP methods, technology and CMS fingerprints, bounded directory-listing checks, error/API/debug exposure, robots/sitemaps, curated sensitive files, source maps, known-format secrets, parameter risk queues, GraphQL introspection, WebSocket discovery, open-redirect validation, and safe traversal/IDOR/BOLA/SSRF manual-review candidates.
+
+Focused detection plugins:
+
+| Plugin | Evidence and safety contract |
+| --- | --- |
+| `cookie_security` | Parses cookie names and attributes from the seed response, classifies common authentication/session names, checks Secure/HttpOnly/SameSite and cookie-prefix rules, and never retains cookie values. |
+| `cms_detection` | Passively correlates generator metadata, distinctive asset paths, response headers, and cookie names for WordPress, Drupal, Joomla, Magento, Shopify, Ghost, TYPO3, Umbraco, Wix, and Squarespace. Plain product-name mentions do not match. |
+| `directory_listing` | Sequentially checks the root and directory candidates derived from discovered in-scope paths. It performs no wordlist brute force, follows no redirects, samples at most 1 MiB per response, requires multiple index markers, and checks no more than 10 candidates with a five-second per-request ceiling. |
 
 External adapters include:
 

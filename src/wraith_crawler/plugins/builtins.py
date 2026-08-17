@@ -46,6 +46,58 @@ def _endpoint(url: str, source: str, **kwargs: object) -> EndpointRecord:
     )
 
 
+def _safe_response_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Retain response metadata without persisting authentication material."""
+    sensitive = {"set-cookie", "authorization", "proxy-authorization"}
+    return {
+        key: "[REDACTED]" if key.lower() in sensitive else value
+        for key, value in headers.items()
+    }
+
+
+def _parse_set_cookie_header(raw: str) -> list[tuple[str, dict[str, str | None]]]:
+    """Parse combined Set-Cookie headers while discarding every cookie value."""
+    cookies: list[tuple[str, dict[str, str | None]]] = []
+    for item in re.split(r",(?=\s*[^;,\s]+=)", raw):
+        segments = [segment.strip() for segment in item.split(";") if segment.strip()]
+        if not segments or "=" not in segments[0]:
+            continue
+        name = segments[0].split("=", 1)[0].strip()
+        if not name:
+            continue
+        attributes: dict[str, str | None] = {}
+        for segment in segments[1:]:
+            key, separator, value = segment.partition("=")
+            attributes[key.strip().lower()] = value.strip() if separator else None
+        cookies.append((name, attributes))
+    return cookies
+
+
+def _is_authentication_cookie(name: str) -> bool:
+    lowered = name.lower()
+    common_names = {
+        "asp.net_sessionid",
+        "auth_token",
+        "connect.sid",
+        "jsessionid",
+        "jwt",
+        "phpsessid",
+        "session",
+        "session_id",
+        "sessionid",
+        "sid",
+    }
+    if lowered in common_names:
+        return True
+    normalized = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
+    return bool(
+        re.search(
+            r"(?:^|_)(?:auth(?:entication)?|access_token|jwt|sess(?:ion)?(?:id)?|sid)(?:$|_)",
+            normalized,
+        )
+    )
+
+
 class SeedHTTPPlugin(AssessmentPlugin):
     name = "seed_http"
     description = "Independent seed URL validation and HTTP metadata"
@@ -81,6 +133,7 @@ class SeedHTTPPlugin(AssessmentPlugin):
         encoding = response.encoding or "utf-8"
         body = body_bytes.decode(encoding, errors="replace")
         headers = {key.lower(): value for key, value in response.headers.items()}
+        safe_headers = _safe_response_headers(headers)
         redirect_chain: list[str] = []
         if response.is_redirect and response.headers.get("location"):
             location = urljoin(str(response.url), response.headers["location"])
@@ -118,7 +171,7 @@ class SeedHTTPPlugin(AssessmentPlugin):
                 target=context.target.url,
                 data={
                     "status_code": response.status_code,
-                    "headers": headers,
+                    "headers": safe_headers,
                     "content_length_observed": len(body_bytes),
                     "body_truncated": len(response.content) > len(body_bytes),
                     "elapsed_ms": elapsed_ms,
@@ -129,7 +182,7 @@ class SeedHTTPPlugin(AssessmentPlugin):
                         kind="http_response",
                         summary=f"GET returned HTTP {response.status_code}",
                         location=context.target.url,
-                        response={"status": response.status_code, "headers": headers},
+                        response={"status": response.status_code, "headers": safe_headers},
                     )
                 ],
                 confidence=Confidence.CONFIRMED,
@@ -145,7 +198,7 @@ class SeedHTTPPlugin(AssessmentPlugin):
                     self.name,
                     status_code=response.status_code,
                     content_type=headers.get("content-type"),
-                    response_metadata={"elapsed_ms": elapsed_ms, "headers": headers},
+                    response_metadata={"elapsed_ms": elapsed_ms, "headers": safe_headers},
                     confidence=Confidence.CONFIRMED,
                 )
             ],
@@ -350,7 +403,15 @@ class HTMLDiscoveryPlugin(AssessmentPlugin):
     name = "html_discovery"
     description = "In-scope endpoint, form, JavaScript, API and authentication discovery"
     requires = frozenset({"http_metadata"})
-    produces = frozenset({"endpoints", "javascript_urls", "api_candidates", "auth_surfaces"})
+    produces = frozenset(
+        {
+            "endpoints",
+            "javascript_urls",
+            "api_candidates",
+            "auth_surfaces",
+            "html_discovery_complete",
+        }
+    )
 
     LINK_RE = re.compile(r"(?:href|src|action)\s*=\s*['\"]([^'\"#]+)", re.I)
     JS_ENDPOINT_RE = re.compile(r"['\"]((?:/|https?://)[A-Za-z0-9_./?=&%:-]{2,})['\"]")
@@ -450,7 +511,10 @@ class SecurityHeadersPlugin(AssessmentPlugin):
                             kind="http_headers",
                             summary=f"Missing: {', '.join(missing)}",
                             location=snapshot.url,
-                            response={"status": snapshot.status_code, "headers": snapshot.headers},
+                            response={
+                                "status": snapshot.status_code,
+                                "headers": _safe_response_headers(snapshot.headers),
+                            },
                         )
                     ],
                     source_plugins=[self.name],
@@ -478,8 +542,9 @@ class SecurityHeadersPlugin(AssessmentPlugin):
 
 class CookieSecurityPlugin(AssessmentPlugin):
     name = "cookie_security"
+    description = "Session-cookie discovery and browser security attribute assessment"
     requires = frozenset({"http_metadata"})
-    produces = frozenset({"cookie_assessment"})
+    produces = frozenset({"cookie_assessment", "session_cookie_analysis"})
     owasp = ("A02:2021", "A07:2021")
     cwe = ("CWE-614", "CWE-1004", "CWE-1275")
 
@@ -488,47 +553,120 @@ class CookieSecurityPlugin(AssessmentPlugin):
         raw = snapshot.headers.get("set-cookie")
         if not raw:
             return self.success(self.name, capabilities_produced=set(self.produces), message="No cookies observed")
-        cookie_strings = re.split(r",(?=[^;,]+=)", raw)
         findings: list[FindingCandidate] = []
-        for cookie in cookie_strings:
-            name = cookie.split("=", 1)[0].strip()
-            lower = cookie.lower()
+        observations: list[dict[str, object]] = []
+        session_cookie_count = 0
+        for name, attributes in _parse_set_cookie_header(raw):
+            attribute_names = sorted(attributes)
+            authentication_cookie = _is_authentication_cookie(name)
+            session_lifetime = "expires" not in attributes and "max-age" not in attributes
+            if authentication_cookie:
+                session_cookie_count += 1
             missing: list[str] = []
-            if context.target.url.startswith("https://") and "; secure" not in lower:
+            if context.target.url.startswith("https://") and "secure" not in attributes:
                 missing.append("Secure")
-            if "; httponly" not in lower:
-                missing.append("HttpOnly")
-            if "; samesite=" not in lower:
-                missing.append("SameSite")
-            if not missing:
+            if authentication_cookie:
+                if "httponly" not in attributes:
+                    missing.append("HttpOnly")
+                if "samesite" not in attributes:
+                    missing.append("SameSite")
+            prefix_violations: list[str] = []
+            lowered_name = name.lower()
+            if lowered_name.startswith("__secure-") and "secure" not in attributes:
+                prefix_violations.append("__Secure- prefix requires Secure")
+            if lowered_name.startswith("__host-"):
+                if "secure" not in attributes:
+                    prefix_violations.append("__Host- prefix requires Secure")
+                if "domain" in attributes:
+                    prefix_violations.append("__Host- prefix forbids Domain")
+                if attributes.get("path") != "/":
+                    prefix_violations.append("__Host- prefix requires Path=/")
+            observations.append(
+                {
+                    "cookie_name": name,
+                    "attributes": attribute_names,
+                    "authentication_cookie": authentication_cookie,
+                    "session_lifetime": session_lifetime,
+                    "prefix_valid": not prefix_violations,
+                }
+            )
+            issues = [*missing, *prefix_violations]
+            if not issues:
                 continue
             findings.append(
                 FindingCandidate(
                     finding_type="insecure_cookie",
                     family="session_security",
-                    title=f"Cookie {name} lacks recommended security attributes",
-                    description="The cookie was set without one or more attributes that constrain transport or browser access.",
+                    title=(
+                        f"Session cookie {name} lacks recommended security controls"
+                        if authentication_cookie
+                        else f"Cookie {name} lacks recommended security controls"
+                    ),
+                    description=(
+                        "A likely authentication or session cookie was set without one or more controls "
+                        "that constrain transport, script access, cross-site use, or cookie scope."
+                        if authentication_cookie
+                        else "The cookie violates a transport or cookie-prefix security requirement."
+                    ),
                     asset=_origin(snapshot.url),
                     affected_endpoints=[snapshot.url],
-                    severity=Severity.MEDIUM if "Secure" in missing or "HttpOnly" in missing else Severity.LOW,
+                    severity=(
+                        Severity.MEDIUM
+                        if authentication_cookie and ({"Secure", "HttpOnly"} & set(missing))
+                        else Severity.LOW
+                    ),
                     confidence=Confidence.CONFIRMED,
                     validation_status=ValidationStatus.CONFIRMED,
                     evidence=[
                         EvidenceRecord(
                             kind="set_cookie",
-                            summary=f"Cookie {name} is missing {', '.join(missing)}",
+                            summary=f"Cookie {name} has control issues: {', '.join(issues)}",
                             location=snapshot.url,
-                            response={"cookie_name": name, "missing_attributes": missing},
+                            response={
+                                "cookie_name": name,
+                                "observed_attributes": attribute_names,
+                                "missing_attributes": missing,
+                                "prefix_violations": prefix_violations,
+                                "authentication_cookie": authentication_cookie,
+                                "session_lifetime": session_lifetime,
+                            },
                         )
                     ],
                     source_plugins=[self.name],
                     cwe=["CWE-614", "CWE-1004", "CWE-1275"],
                     owasp=["A02:2021", "A07:2021"],
-                    remediation="Set Secure, HttpOnly and an appropriate SameSite policy; minimize Domain and Path scope.",
-                    metadata={"cookie_name": name, "missing_attributes": missing},
+                    remediation=(
+                        "Set Secure, HttpOnly and an appropriate SameSite policy on authentication cookies; "
+                        "honor __Secure- and __Host- prefix rules and minimize Domain and Path scope."
+                    ),
+                    metadata={
+                        "cookie_name": name,
+                        "cookie_class": "authentication_session" if authentication_cookie else "other",
+                        "session_lifetime": session_lifetime,
+                        "missing_attributes": missing,
+                        "prefix_violations": prefix_violations,
+                    },
                 )
             )
-        return self.success(self.name, capabilities_produced=set(self.produces), findings=findings)
+        return self.success(
+            self.name,
+            capabilities_produced=set(self.produces),
+            findings=findings,
+            observations=[
+                RawObservation(
+                    plugin=self.name,
+                    observation_type="session_cookie_inventory",
+                    target=snapshot.url,
+                    data={"cookies": observations},
+                    confidence=Confidence.CONFIRMED,
+                )
+            ],
+            metrics={
+                "cookies_observed": len(observations),
+                "authentication_cookies": session_cookie_count,
+                "cookies_with_issues": len(findings),
+            },
+        )
 
 
 class CORSPlugin(AssessmentPlugin):
@@ -1141,6 +1279,7 @@ class SecretsPlugin(AssessmentPlugin):
 
 class FingerprintingPlugin(AssessmentPlugin):
     name = "technology_fingerprinting"
+    description = "Passive web-server and client-framework fingerprinting"
     requires = frozenset({"http_metadata"})
     produces = frozenset({"technologies"})
     owasp = ("A06:2021",)
@@ -1175,9 +1314,6 @@ class FingerprintingPlugin(AssessmentPlugin):
                 )
             )
         signatures = {
-            "WordPress": (r"wp-(?:content|includes)", "cms"),
-            "Drupal": (r"/sites/default/files/|Drupal\.settings", "cms"),
-            "Joomla": (r"/media/system/js/|com_content", "cms"),
             "React": (r"__REACT_DEVTOOLS_GLOBAL_HOOK__|data-reactroot", "javascript_framework"),
             "Angular": (r"ng-version=|app-root", "javascript_framework"),
         }
@@ -1197,6 +1333,359 @@ class FingerprintingPlugin(AssessmentPlugin):
         )
 
 
+class CMSDetectionPlugin(AssessmentPlugin):
+    name = "cms_detection"
+    description = "Passive multi-signal CMS and hosted-site-platform detection"
+    requires = frozenset({"http_metadata"})
+    produces = frozenset({"cms_detection", "technologies"})
+    owasp = ("A06:2021",)
+
+    GENERATOR_PATTERNS = {
+        "WordPress": re.compile(r"\bWordPress(?:\s+([0-9][0-9A-Za-z._-]*))?", re.I),
+        "Drupal": re.compile(r"\bDrupal(?:\s+([0-9][0-9A-Za-z._-]*))?", re.I),
+        "Joomla": re.compile(r"\bJoomla!?(?:\s+([0-9][0-9A-Za-z._-]*))?", re.I),
+        "Magento": re.compile(r"\bMagento(?:\s+([0-9][0-9A-Za-z._-]*))?", re.I),
+        "Ghost": re.compile(r"\bGhost(?:\s+([0-9][0-9A-Za-z._-]*))?", re.I),
+        "TYPO3": re.compile(r"\bTYPO3(?:\s+CMS)?(?:\s+([0-9][0-9A-Za-z._-]*))?", re.I),
+        "Umbraco": re.compile(r"\bUmbraco(?:\s+([0-9][0-9A-Za-z._-]*))?", re.I),
+    }
+    BODY_SIGNATURES = {
+        "WordPress": (
+            ("wp-content or wp-includes asset path", re.compile(r"/wp-(?:content|includes)/", re.I), 2),
+            ("WordPress REST API reference", re.compile(r"api\.w\.org|/wp-json(?:/|[\"'])", re.I), 2),
+        ),
+        "Drupal": (
+            ("Drupal settings or public asset path", re.compile(r"drupalSettings|/sites/(?:default|all)/(?:files|modules|themes)/", re.I), 2),
+        ),
+        "Joomla": (
+            ("Joomla component or system-media path", re.compile(r"/media/system/(?:js|css)/|/components/com_|[?&]option=com_", re.I), 2),
+        ),
+        "Magento": (
+            ("Magento client or versioned static asset", re.compile(r"Magento_[A-Za-z]|mage/cookies|/static/version[0-9]+/", re.I), 2),
+        ),
+        "Shopify": (
+            ("Shopify CDN or theme marker", re.compile(r"cdn\.shopify\.com|Shopify\.theme|shopify-section", re.I), 3),
+        ),
+        "Ghost": (
+            ("Ghost content or client marker", re.compile(r"/ghost/|ghost\.io|data-ghost", re.I), 2),
+        ),
+        "TYPO3": (
+            ("TYPO3 public asset path", re.compile(r"/typo3conf/|/typo3temp/|/typo3/sysext/", re.I), 2),
+        ),
+        "Umbraco": (
+            ("Umbraco public path or marker", re.compile(r"/umbraco/|data-umbraco", re.I), 2),
+        ),
+        "Wix": (
+            ("Wix static asset or SDK marker", re.compile(r"static\.wixstatic\.com|wix-code-sdk", re.I), 3),
+        ),
+        "Squarespace": (
+            ("Squarespace static asset or runtime marker", re.compile(r"static[0-9]*\.squarespace\.com|Squarespace\.context|squarespace-cdn\.com", re.I), 3),
+        ),
+    }
+    HEADER_SIGNATURES = {
+        "WordPress": (("WordPress REST API Link header", re.compile(r"api\.w\.org", re.I), 2),),
+        "Drupal": (("Drupal cache header", re.compile(r"^x-drupal-(?:cache|dynamic-cache):", re.I | re.M), 3),),
+        "Magento": (("Magento variation header", re.compile(r"^x-magento-vary:", re.I | re.M), 3),),
+        "Shopify": (("Shopify response header", re.compile(r"^x-(?:shopid|shopify)[^:]*:", re.I | re.M), 3),),
+        "Wix": (("Wix response header", re.compile(r"^x-wix-", re.I | re.M), 3),),
+    }
+    COOKIE_NAME_PATTERNS = {
+        "WordPress": re.compile(r"^(?:wordpress_|wordpress_logged_in_|wp-settings-)", re.I),
+        "Drupal": re.compile(r"^(?:S?SESS)[A-Za-z0-9_-]+$"),
+        "Magento": re.compile(r"^(?:private_content_version|section_data_ids)$", re.I),
+        "Shopify": re.compile(r"^_shopify_", re.I),
+    }
+    CATEGORIES = {
+        "Magento": "ecommerce_cms",
+        "Shopify": "hosted_ecommerce_cms",
+        "Wix": "hosted_cms",
+        "Squarespace": "hosted_cms",
+    }
+
+    @staticmethod
+    def _generator_values(body: str) -> list[str]:
+        values: list[str] = []
+        for tag in re.findall(r"<meta\b[^>]*>", body, re.I):
+            name = re.search(r"\bname\s*=\s*(['\"])generator\1", tag, re.I)
+            content = re.search(r"\bcontent\s*=\s*(['\"])(.*?)\1", tag, re.I | re.S)
+            if name and content:
+                values.append(html.unescape(content.group(2)).strip())
+        return values
+
+    @classmethod
+    def detect(cls, snapshot: HTTPResponseSnapshot) -> list[TechnologyRecord]:
+        products = set(cls.BODY_SIGNATURES) | set(cls.HEADER_SIGNATURES) | set(cls.GENERATOR_PATTERNS)
+        scores = {product: 0 for product in products}
+        evidence: dict[str, list[str]] = {product: [] for product in products}
+        versions: dict[str, str | None] = {product: None for product in products}
+
+        for generator in cls._generator_values(snapshot.body):
+            for product, pattern in cls.GENERATOR_PATTERNS.items():
+                match = pattern.search(generator)
+                if not match:
+                    continue
+                scores[product] += 4
+                evidence[product].append(f"Generator meta tag identifies {product}")
+                if match.lastindex and match.group(1):
+                    versions[product] = match.group(1).rstrip(".,;")
+
+        for product, signatures in cls.BODY_SIGNATURES.items():
+            for label, pattern, weight in signatures:
+                if pattern.search(snapshot.body):
+                    scores[product] += weight
+                    evidence[product].append(label)
+
+        header_text = "\n".join(
+            f"{key}: {value}"
+            for key, value in snapshot.headers.items()
+            if key.lower() != "set-cookie"
+        )
+        for product, signatures in cls.HEADER_SIGNATURES.items():
+            for label, pattern, weight in signatures:
+                if pattern.search(header_text):
+                    scores[product] += weight
+                    evidence[product].append(label)
+
+        cookie_names = [
+            name for name, _attributes in _parse_set_cookie_header(snapshot.headers.get("set-cookie", ""))
+        ]
+        for product, pattern in cls.COOKIE_NAME_PATTERNS.items():
+            if any(pattern.search(name) for name in cookie_names):
+                scores[product] += 2
+                evidence[product].append(f"{product}-specific cookie name")
+
+        technologies: list[TechnologyRecord] = []
+        for product in sorted(products):
+            if scores[product] < 2:
+                continue
+            technologies.append(
+                TechnologyRecord(
+                    product=product,
+                    version=versions[product],
+                    category=cls.CATEGORIES.get(product, "cms"),
+                    confidence=Confidence.HIGH if scores[product] >= 4 else Confidence.MEDIUM,
+                    evidence=sorted(set(evidence[product])),
+                    source_plugin=cls.name,
+                )
+            )
+        return technologies
+
+    async def run(self, context: PluginContext) -> PluginResult:
+        technologies = self.detect(context.http_snapshots[context.target.url])
+        return self.success(
+            self.name,
+            capabilities_produced=set(self.produces),
+            technologies=technologies,
+            observations=[
+                RawObservation(
+                    plugin=self.name,
+                    observation_type="cms_fingerprints",
+                    target=context.target.url,
+                    data={
+                        "detected": [
+                            {
+                                "product": technology.product,
+                                "version": technology.version,
+                                "category": technology.category,
+                                "confidence": technology.confidence.value,
+                                "signal_count": len(technology.evidence),
+                            }
+                            for technology in technologies
+                        ]
+                    },
+                    confidence=Confidence.HIGH if technologies else Confidence.MEDIUM,
+                )
+            ],
+            metrics={"cms_detected": len(technologies)},
+        )
+
+
+class DirectoryListingPlugin(AssessmentPlugin):
+    name = "directory_listing"
+    description = "Bounded verification of directory indexes derived from discovered in-scope paths"
+    requires = frozenset({"http_metadata", "html_discovery_complete"})
+    produces = frozenset({"directory_listing_assessment"})
+    owasp = ("A05:2021",)
+    cwe = ("CWE-548",)
+    timeout_seconds = 60
+
+    MAX_CANDIDATES = 10
+    BODY_LIMIT = 1_048_576
+    SIGNATURES = {
+        "index_title": re.compile(r"<title[^>]*>\s*(?:index of|directory listing for)\b", re.I),
+        "index_heading": re.compile(r"<h1[^>]*>\s*(?:index of|directory listing for)\b", re.I),
+        "parent_directory": re.compile(r"(?:href\s*=\s*['\"]\.\./['\"]|parent directory|\[to parent directory\])", re.I),
+        "listing_columns": re.compile(r"(?:last modified|last modification|\bname\b.{0,80}\bsize\b)", re.I | re.S),
+        "iis_listing": re.compile(r"directory listing\s*--\s*/", re.I),
+    }
+
+    @classmethod
+    def detect_signatures(cls, body: str) -> list[str]:
+        matches = [name for name, pattern in cls.SIGNATURES.items() if pattern.search(body)]
+        index_marker = any(name in matches for name in ("index_title", "index_heading", "iis_listing"))
+        structure_marker = any(name in matches for name in ("parent_directory", "listing_columns"))
+        return matches if index_marker and structure_marker else []
+
+    @staticmethod
+    def candidate_urls(context: PluginContext) -> list[str]:
+        origin = _origin(context.target.url)
+        paths = {"/"}
+        for endpoint in context.inventory.endpoints.values():
+            path = urlsplit(endpoint.url).path or "/"
+            if path.endswith("/"):
+                directory = path
+            else:
+                parent = path.rsplit("/", 1)[0]
+                directory = f"{parent}/" if parent else "/"
+            paths.add(directory)
+        urls = {
+            canonical_url(urljoin(f"{origin}/", path.lstrip("/")))
+            for path in paths
+        }
+        return sorted(
+            (url for url in urls if context.scope.check(url).allowed),
+            key=lambda value: (urlsplit(value).path.count("/"), value),
+        )
+
+    async def run(self, context: PluginContext) -> PluginResult:
+        candidates = self.candidate_urls(context)[
+            : min(self.MAX_CANDIDATES, context.config.rate.max_candidates)
+        ]
+        seed = context.http_snapshots[context.target.url]
+        cached = {canonical_url(seed.url): seed}
+        endpoints: list[EndpointRecord] = []
+        findings: list[FindingCandidate] = []
+        matches: list[dict[str, object]] = []
+        failed_requests = 0
+        network_requests = 0
+        request_interval = 1.0 / max(context.config.rate.global_requests_per_second, 0.1)
+
+        async with httpx.AsyncClient(
+            timeout=min(context.config.rate.request_timeout_seconds, 5.0),
+            follow_redirects=False,
+            headers={"User-Agent": "Wraith-Crawler/0.1 authorized-security-assessment"},
+        ) as client:
+            for url in candidates:
+                snapshot = cached.get(url)
+                truncated = False
+                if snapshot is None:
+                    if network_requests:
+                        await asyncio.sleep(request_interval)
+                    started = time.monotonic()
+                    try:
+                        async with client.stream("GET", url) as response:
+                            body_bytes = bytearray()
+                            async for chunk in response.aiter_bytes():
+                                remaining = self.BODY_LIMIT - len(body_bytes)
+                                if remaining <= 0:
+                                    truncated = True
+                                    break
+                                body_bytes.extend(chunk[:remaining])
+                                if len(chunk) > remaining:
+                                    truncated = True
+                                    break
+                            encoding = response.encoding or "utf-8"
+                            snapshot = HTTPResponseSnapshot(
+                                url=str(response.url),
+                                status_code=response.status_code,
+                                headers={
+                                    key.lower(): value for key, value in response.headers.items()
+                                },
+                                body=bytes(body_bytes).decode(encoding, errors="replace"),
+                                elapsed_ms=int((time.monotonic() - started) * 1000),
+                            )
+                    except httpx.HTTPError:
+                        failed_requests += 1
+                        network_requests += 1
+                        continue
+                    network_requests += 1
+                    context.http_snapshots[url] = snapshot
+
+                endpoints.append(
+                    _endpoint(
+                        url,
+                        self.name,
+                        status_code=snapshot.status_code,
+                        content_type=snapshot.headers.get("content-type"),
+                        response_metadata={"body_truncated": truncated},
+                        confidence=Confidence.CONFIRMED,
+                    )
+                )
+                content_type = snapshot.headers.get("content-type", "").split(";", 1)[0].lower()
+                if snapshot.status_code < 200 or snapshot.status_code >= 300:
+                    continue
+                if content_type and not (
+                    content_type.startswith("text/") or content_type == "application/xhtml+xml"
+                ):
+                    continue
+                signatures = self.detect_signatures(snapshot.body)
+                if not signatures:
+                    continue
+                matches.append({"url": url, "signatures": signatures})
+                findings.append(
+                    FindingCandidate(
+                        finding_type="directory_listing",
+                        family="security_misconfiguration",
+                        title="Directory indexing appears enabled",
+                        description=(
+                            "A bounded GET request returned multiple independent directory-index markers "
+                            "at an evidence-derived in-scope path."
+                        ),
+                        asset=_origin(url),
+                        affected_endpoints=[url],
+                        severity=Severity.MEDIUM,
+                        confidence=Confidence.HIGH,
+                        validation_status=ValidationStatus.SUSPECTED,
+                        evidence=[
+                            EvidenceRecord(
+                                kind="directory_index_response",
+                                summary=f"Directory index markers: {', '.join(signatures)}",
+                                location=url,
+                                response={
+                                    "status": snapshot.status_code,
+                                    "content_type": content_type or None,
+                                    "signatures": signatures,
+                                    "body_truncated": truncated,
+                                },
+                            )
+                        ],
+                        source_plugins=[self.name],
+                        cwe=["CWE-548"],
+                        owasp=["A05:2021"],
+                        remediation=(
+                            "Disable directory indexing, remove unintended artifacts, and explicitly publish "
+                            "only required files."
+                        ),
+                    )
+                )
+
+        return self.success(
+            self.name,
+            capabilities_produced=set(self.produces),
+            endpoints=endpoints,
+            findings=findings,
+            observations=[
+                RawObservation(
+                    plugin=self.name,
+                    observation_type="directory_listing_checks",
+                    target=context.target.url,
+                    data={
+                        "candidate_count": len(candidates),
+                        "matches": matches,
+                        "failed_requests": failed_requests,
+                    },
+                    confidence=Confidence.HIGH,
+                )
+            ],
+            metrics={
+                "candidates": len(candidates),
+                "network_requests": network_requests,
+                "failed_requests": failed_requests,
+                "directory_listings": len(findings),
+            },
+        )
+
+
 class PassiveExposurePlugin(AssessmentPlugin):
     name = "passive_exposure"
     requires = frozenset({"http_metadata", "endpoints"})
@@ -1207,31 +1696,6 @@ class PassiveExposurePlugin(AssessmentPlugin):
         snapshot = context.http_snapshots[context.target.url]
         findings: list[FindingCandidate] = []
         body = snapshot.body
-        if re.search(r"(?i)(index of /|directory listing for|parent directory</a>)", body):
-            findings.append(
-                FindingCandidate(
-                    finding_type="directory_listing",
-                    family="security_misconfiguration",
-                    title="Directory indexing appears enabled",
-                    description="The response contains multiple deterministic directory-index markers.",
-                    asset=_origin(snapshot.url),
-                    affected_endpoints=[snapshot.url],
-                    severity=Severity.MEDIUM,
-                    confidence=Confidence.HIGH,
-                    validation_status=ValidationStatus.SUSPECTED,
-                    evidence=[
-                        EvidenceRecord(
-                            kind="response_signature",
-                            summary="Directory index signature present in the response",
-                            location=snapshot.url,
-                        )
-                    ],
-                    source_plugins=[self.name],
-                    cwe=["CWE-548"],
-                    owasp=["A05:2021"],
-                    remediation="Disable directory indexing and explicitly publish only required files.",
-                )
-            )
         if re.search(r"(?i)(traceback \(most recent call last\)|stack trace:|exception in thread|debug=true)", body):
             findings.append(
                 FindingCandidate(
@@ -1479,6 +1943,8 @@ BUILTIN_PLUGINS = (
     CORSPlugin,
     HTTPMethodsPlugin,
     FingerprintingPlugin,
+    CMSDetectionPlugin,
+    DirectoryListingPlugin,
     PassiveExposurePlugin,
     RobotsSitemapPlugin,
     SensitiveFilesPlugin,

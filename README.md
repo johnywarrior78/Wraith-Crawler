@@ -10,7 +10,7 @@ It is designed for repeatable assessment workflows where scope, evidence, scanne
 ## Highlights
 
 - Strict HTTP(S) scope enforcement and bounded concurrency, rate, depth, and timeout controls.
-- Built-in checks for HTTP behavior, TLS, headers, cookies, CORS, forms, JavaScript, APIs, exposed files, technologies, and manual-review candidates.
+- Built-in checks for HTTP behavior, TLS, headers, session cookies, CORS, forms, JavaScript, APIs, directory listings, CMS/technology fingerprints, exposed files, and manual-review candidates.
 - Integrated ProjectDiscovery HTTPX, Katana, Nuclei, Dalfox, SQLMap, Nikto, and Retire.js adapters.
 - Evidence-backed finding lifecycle, OWASP/CWE mappings, attack paths, priorities, and scan history.
 - PostgreSQL persistence with Alembic migrations and stable read-only reporting views.
@@ -69,6 +69,11 @@ sudo wraith-crawler --file /absolute/path/to/targets.txt --profile standard
 sudo wraith-crawler --url https://authorized.example \
   --plugin seed_http --plugin tls
 sudo wraith-crawler --url https://authorized.example --exclude-plugin katana
+
+# Run the focused session-cookie, CMS, and directory-listing workflow.
+sudo wraith-crawler --url https://authorized.example \
+  --plugin seed_http --plugin html_discovery --plugin cookie_security \
+  --plugin cms_detection --plugin directory_listing
 
 # Inspect coverage and installation health.
 sudo wraith-crawler coverage

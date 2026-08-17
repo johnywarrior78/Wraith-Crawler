@@ -27,7 +27,7 @@ OWASP_COVERAGE: tuple[CoverageEntry, ...] = (
     CoverageEntry(
         "A02:2021",
         "Cryptographic Failures",
-        ("tls", "cookie_security", "secret_exposure"),
+        ("tls", "cookie_security", "session_cookie_analysis", "secret_exposure"),
         ("CWE-295", "CWE-319", "CWE-614"),
         "high",
         "deterministic",
@@ -63,7 +63,7 @@ OWASP_COVERAGE: tuple[CoverageEntry, ...] = (
     CoverageEntry(
         "A06:2021",
         "Vulnerable and Outdated Components",
-        ("retirejs", "technology_fingerprinting", "nuclei"),
+        ("retirejs", "technology_fingerprinting", "cms_detection", "nuclei"),
         ("CWE-1104",),
         "high",
         "version_and_signature",
@@ -72,7 +72,7 @@ OWASP_COVERAGE: tuple[CoverageEntry, ...] = (
     CoverageEntry(
         "A07:2021",
         "Identification and Authentication Failures",
-        ("auth_discovery", "cookie_security"),
+        ("auth_discovery", "cookie_security", "session_cookie_analysis"),
         ("CWE-287", "CWE-384"),
         "partial",
         "behavioral_observation",
