@@ -1,0 +1,22 @@
+services:
+  metabase:
+    image: metabase/metabase:v0.63.2.x
+    container_name: wraith-metabase
+    restart: unless-stopped
+    # Supported production hosts are Linux. Host networking lets Metabase use
+    # 127.0.0.1 for the host PostgreSQL service; Jetty remains loopback-only.
+    network_mode: host
+    environment:
+      MB_DB_TYPE: ${MB_DB_TYPE}
+      MB_DB_DBNAME: ${MB_DB_DBNAME}
+      MB_DB_PORT: ${MB_DB_PORT}
+      MB_DB_USER: ${MB_DB_USER}
+      MB_DB_PASS: ${MB_DB_PASS}
+      MB_DB_HOST: ${MB_DB_HOST}
+      MB_JETTY_HOST: 127.0.0.1
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 45s

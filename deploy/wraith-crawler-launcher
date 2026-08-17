@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Wraith Crawler managed launcher
+set -Eeuo pipefail
+
+APP_USER="wraith-crawler"
+INSTALL_DIR="/opt/wraith-crawler"
+CONFIG_DIR="/etc/wraith-crawler"
+RUNTIME_ENV="$CONFIG_DIR/runtime.env"
+APP_HOME="/var/lib/wraith-crawler"
+
+if [[ ${EUID} -ne 0 && "$(id -un)" != "$APP_USER" ]]; then
+  printf 'Wraith Crawler requires access to protected runtime credentials. Run the command with: sudo wraith-crawler ...\n' >&2
+  exit 77
+fi
+[[ -r "$RUNTIME_ENV" ]] || { printf 'Missing or unreadable runtime configuration: %s\n' "$RUNTIME_ENV" >&2; exit 1; }
+
+set -a
+. "$RUNTIME_ENV"
+set +a
+PYTHON_BIN="${WRAITH_PYTHON_EXECUTABLE:-$INSTALL_DIR/.venv/bin/python}"
+[[ -x "$PYTHON_BIN" ]] || { printf 'Missing configured Python interpreter: %s\n' "$PYTHON_BIN" >&2; exit 1; }
+export HOME="$APP_HOME"
+export XDG_CONFIG_HOME="$APP_HOME/.config"
+export XDG_CACHE_HOME="$APP_HOME/.cache"
+export XDG_DATA_HOME="$APP_HOME/.local/share"
+cd "$INSTALL_DIR"
+
+if [[ "$(id -un)" == "$APP_USER" ]]; then
+  exec "$PYTHON_BIN" -m wraith_crawler.cli --config "$CONFIG_DIR/config.yaml" "$@"
+fi
+exec runuser -u "$APP_USER" --preserve-environment -- \
+  "$PYTHON_BIN" -m wraith_crawler.cli --config "$CONFIG_DIR/config.yaml" "$@"

@@ -1,0 +1,21 @@
+[Unit]
+Description=Wraith Crawler on-demand worker template
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=wraith-crawler
+Group=wraith-crawler
+WorkingDirectory=/opt/wraith-crawler
+EnvironmentFile=/etc/wraith-crawler/runtime.env
+Environment=HOME=/var/lib/wraith-crawler
+Environment=XDG_CONFIG_HOME=/var/lib/wraith-crawler/.config
+Environment=XDG_CACHE_HOME=/var/lib/wraith-crawler/.cache
+Environment=XDG_DATA_HOME=/var/lib/wraith-crawler/.local/share
+ExecStart=/usr/bin/false
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/wraith-crawler /var/log/wraith-crawler /opt/wraith-crawler/output

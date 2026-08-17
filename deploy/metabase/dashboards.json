@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "collection": "Wraith Crawler",
+  "dashboards": {
+    "Executive Dashboard": ["vw_executive_kpis", "vw_application_risk"],
+    "Risk Dashboard": ["vw_findings_current", "vw_application_risk"],
+    "OWASP Top 10 Dashboard": ["vw_owasp_coverage"],
+    "Attack Paths Dashboard": ["vw_attack_paths", "vw_attack_path_steps", "vw_attack_path_findings"],
+    "Technology / Vulnerable Components Dashboard": ["vw_technology_inventory", "vw_vulnerable_components"],
+    "Plugin Health Dashboard": ["vw_plugin_health"],
+    "Historical Trends Dashboard": ["vw_finding_trends_daily", "vw_finding_history", "vw_scan_history"],
+    "Assessment Operations Dashboard": ["vw_assessment_summary", "vw_scan_history"],
+    "Manual Review Dashboard": ["vw_manual_review_queue"]
+  }
+}

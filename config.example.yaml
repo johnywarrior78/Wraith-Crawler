@@ -1,0 +1,36 @@
+environment: production
+database:
+  host: 127.0.0.1
+  port: 5432
+  name: wraith_crawler
+  username: wraith_crawler
+  # Supply password through the installed secret file or WRAITH_DATABASE_URL.
+rate:
+  global_requests_per_second: 5
+  target_concurrency: 2
+  plugin_concurrency: 4
+  request_timeout_seconds: 15
+  tool_timeout_seconds: 300
+  crawl_depth: 3
+  max_endpoints: 1000
+profile: standard
+report_output_directory: output
+tools:
+  # Absolute paths avoid collisions with Python's unrelated `httpx` command.
+  httpx: /usr/local/lib/wraith-crawler/bin/httpx
+  katana: /usr/local/bin/katana
+  nuclei: /usr/local/bin/nuclei
+  dalfox: /usr/local/bin/dalfox
+  sqlmap: /usr/bin/sqlmap
+  nikto: /usr/bin/nikto
+  retire: /usr/local/bin/retire
+  # auto/origins deduplicates to origins; endpoints preserves bounded discovered URLs.
+  nuclei_target_mode: auto
+llm:
+  enabled: false
+  provider: ollama
+  endpoint: http://127.0.0.1:11434
+  model: qwen2.5:7b
+metabase:
+  enabled: true
+  url: http://127.0.0.1:3000

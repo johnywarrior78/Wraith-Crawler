@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: wraith_ci
+          POSTGRES_USER: wraith_ci
+          POSTGRES_PASSWORD: CIOnly-Wraith-Password-123
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wraith_ci -d wraith_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      WRAITH_CI_POSTGRES_URL: postgresql+psycopg://wraith_ci:CIOnly-Wraith-Password-123@127.0.0.1:5432/wraith_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e '.[dev]'
+      - run: ruff check src tests migrations scripts
+      - run: pytest --cov=wraith_crawler --cov-report=term-missing
+      - run: WRAITH_DATABASE_URL='sqlite+pysqlite:///migration-test.sqlite3' alembic upgrade head
+      - run: WRAITH_DATABASE_URL="$WRAITH_CI_POSTGRES_URL" alembic upgrade head
+      - run: WRAITH_DATABASE_URL="$WRAITH_CI_POSTGRES_URL" python scripts/verify_reporting_views.py
