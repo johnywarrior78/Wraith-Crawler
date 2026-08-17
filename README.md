@@ -2,7 +2,7 @@
 
 Wraith Crawler is an evidence-first external web application security assessment platform. It discovers an authorized target's reachable attack surface, runs bounded non-destructive checks, normalizes findings, records assessment history in PostgreSQL, and produces API, PDF, Excel, and Metabase outputs.
 
-It is designed for repeatable assessment workflows where scope, evidence, scanner health, and reporting matter as much as detection. This is a greenfield implementation with no AutoWASP runtime dependency.
+It is designed for repeatable assessment workflows where scope, evidence, scanner health, and reporting matter as much as detection. 
 
 > [!CAUTION]
 > Only scan systems you own or have explicit permission to test. Wraith Crawler does not authorize testing and is not designed for denial of service, brute force, credential reuse, destructive payloads, database dumping, persistence, lateral movement, or unrestricted internal SSRF probing.
