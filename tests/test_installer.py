@@ -179,6 +179,14 @@ def test_scanners_run_with_service_account_home() -> None:
     assert 'run_as_application /usr/local/bin/nuclei -update-templates -silent' in installer
 
 
+def test_upgrade_doctor_runs_with_service_account_home() -> None:
+    upgrade = (Path(__file__).resolve().parents[1] / "upgrade.sh").read_text()
+    assert (
+        'run_as_application "$PYTHON_BIN" -m wraith_crawler.cli '
+        '--config "$CONFIG_DIR/config.yaml" doctor'
+    ) in upgrade
+
+
 def test_installer_restores_launcher_when_pip_fails() -> None:
     install_script = (Path(__file__).resolve().parents[1] / "install.sh").read_text()
     function = install_script.split("install_python_package() {", 1)[1].split("\n}", 1)[0]

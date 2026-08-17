@@ -28,5 +28,5 @@ else
 fi
 systemctl daemon-reload
 systemctl start wraith-crawler-api
-runuser -u wraith-crawler --preserve-environment -- "$PYTHON_BIN" -m wraith_crawler.cli --config "$CONFIG_DIR/config.yaml" doctor
+run_as_application "$PYTHON_BIN" -m wraith_crawler.cli --config "$CONFIG_DIR/config.yaml" doctor
 printf 'Upgrade completed. Backup: /var/backups/wraith-crawler/pre-upgrade-%s\n' "$timestamp"
