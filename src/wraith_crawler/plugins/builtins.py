@@ -807,7 +807,11 @@ class HTTPMethodsPlugin(AssessmentPlugin):
 
 class ParameterAnalysisPlugin(AssessmentPlugin):
     name = "parameter_analysis"
-    requires = frozenset({"endpoints"})
+    # Wait until seed-page HTML discovery has been merged into the shared
+    # inventory. The generic ``endpoints`` capability is produced by the seed
+    # request itself, so using it alone lets this plugin race ahead and miss
+    # query parameters on links and forms discovered in the response body.
+    requires = frozenset({"endpoints", "html_discovery_complete"})
     produces = frozenset({"parameter_candidates"})
     owasp = ("A01:2021", "A03:2021", "A10:2021")
 
