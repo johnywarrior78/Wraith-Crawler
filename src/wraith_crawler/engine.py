@@ -247,8 +247,16 @@ class ScanEngine:
                     )
                 )
             self._attach_finding_evidence(session, assessment_id, findings, candidates)
+            completed_plugins = {
+                item.result.plugin
+                for item in timed_results
+                if item.result.state is PluginState.COMPLETED
+            }
             history = self.finding_service.correlate_history(
-                session, application_id, assessment_id
+                session,
+                application_id,
+                assessment_id,
+                completed_plugins=completed_plugins,
             )
             paths = self._persist_attack_paths(
                 session, application_id, assessment_id, findings
@@ -271,10 +279,11 @@ class ScanEngine:
                 )
             assessment = session.get(Assessment, assessment_id)
             if assessment:
-                failed = sum(
+                degraded = sum(
                     1
                     for item in timed_results
-                    if item.result.state in {PluginState.FAILED, PluginState.TIMED_OUT}
+                    if item.result.state
+                    in {PluginState.FAILED, PluginState.TIMED_OUT, PluginState.PARTIAL}
                 )
                 completed = sum(
                     1
@@ -283,7 +292,7 @@ class ScanEngine:
                 )
                 assessment.status = (
                     AssessmentStatus.COMPLETED.value
-                    if failed == 0
+                    if degraded == 0
                     else AssessmentStatus.PARTIAL.value
                     if completed
                     else AssessmentStatus.FAILED.value

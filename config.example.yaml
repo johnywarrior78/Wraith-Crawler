@@ -11,6 +11,7 @@ rate:
   plugin_concurrency: 4
   request_timeout_seconds: 15
   tool_timeout_seconds: 300
+  retries: 2
   crawl_depth: 3
   max_endpoints: 1000
 profile: standard

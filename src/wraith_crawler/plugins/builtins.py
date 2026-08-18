@@ -103,10 +103,12 @@ class SeedHTTPPlugin(AssessmentPlugin):
     description = "Independent seed URL validation and HTTP metadata"
     requires = frozenset({"seed_url"})
     produces = frozenset({"http_metadata", "validated_origin", "endpoints"})
-    timeout_seconds = 45
+    timeout_seconds = 60
+    RETRYABLE_NON_FINAL_STATUSES = frozenset({202, 429, 502, 503, 504})
 
     async def run(self, context: PluginContext) -> PluginResult:
         started = time.monotonic()
+        requests = 0
         try:
             async with httpx.AsyncClient(
                 timeout=context.config.rate.request_timeout_seconds,
@@ -114,7 +116,13 @@ class SeedHTTPPlugin(AssessmentPlugin):
                 verify=True,
                 headers={"User-Agent": "Wraith-Crawler/0.1 authorized-security-assessment"},
             ) as client:
-                response = await client.get(context.target.url)
+                for attempt in range(max(0, context.config.rate.retries) + 1):
+                    response = await client.get(context.target.url)
+                    requests += 1
+                    if response.status_code not in self.RETRYABLE_NON_FINAL_STATUSES:
+                        break
+                    if attempt < max(0, context.config.rate.retries):
+                        await asyncio.sleep(self._retry_delay(response, attempt))
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
             return PluginResult(
                 plugin=self.name,
@@ -176,6 +184,7 @@ class SeedHTTPPlugin(AssessmentPlugin):
                     "body_truncated": len(response.content) > len(body_bytes),
                     "elapsed_ms": elapsed_ms,
                     "redirect_chain": redirect_chain,
+                    "request_attempts": requests,
                 },
                 evidence=[
                     EvidenceRecord(
@@ -188,6 +197,25 @@ class SeedHTTPPlugin(AssessmentPlugin):
                 confidence=Confidence.CONFIRMED,
             )
         ]
+        metrics = {
+            "requests": requests,
+            "bytes_sampled": len(body_bytes),
+            "status_code": response.status_code,
+        }
+        if response.status_code in self.RETRYABLE_NON_FINAL_STATUSES:
+            return PluginResult(
+                plugin=self.name,
+                state=PluginState.PARTIAL,
+                failure_reason=FailureReason.INCOMPLETE_RESPONSE,
+                message=(
+                    f"Seed URL returned non-final HTTP {response.status_code} after "
+                    f"{requests} attempt(s); discovery capabilities were withheld"
+                ),
+                assets=[asset],
+                observations=observations,
+                metrics=metrics,
+                partial_output_trustworthy=True,
+            )
         return self.success(
             self.name,
             capabilities_produced=set(self.produces),
@@ -203,8 +231,16 @@ class SeedHTTPPlugin(AssessmentPlugin):
                 )
             ],
             observations=observations,
-            metrics={"requests": 1, "bytes_sampled": len(body_bytes)},
+            metrics=metrics,
         )
+
+    @staticmethod
+    def _retry_delay(response: httpx.Response, attempt: int) -> float:
+        retry_after = response.headers.get("retry-after", "").strip()
+        try:
+            return min(5.0, max(0.0, float(retry_after)))
+        except ValueError:
+            return min(5.0, float(2**attempt))
 
 
 class TLSPlugin(AssessmentPlugin):

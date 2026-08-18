@@ -24,6 +24,7 @@ class FailureReason(StrEnum):
     CONFIGURATION_ERROR = "configuration_error"
     INTERNAL_PLUGIN_ERROR = "internal_plugin_error"
     INVALID_INPUT = "invalid_input"
+    INCOMPLETE_RESPONSE = "incomplete_response"
 
 
 class Severity(StrEnum):

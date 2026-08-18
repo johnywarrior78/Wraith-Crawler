@@ -287,7 +287,12 @@ class FindingPersistenceService:
         return final_findings
 
     def correlate_history(
-        self, session: Session, application_id: str, assessment_id: str
+        self,
+        session: Session,
+        application_id: str,
+        assessment_id: str,
+        *,
+        completed_plugins: set[str] | None = None,
     ) -> dict[str, int]:
         current = list(
             session.scalars(
@@ -337,6 +342,10 @@ class FindingPersistenceService:
             )
         for fp, old in previous_by_fp.items():
             if fp not in current_by_fp and old.status != FindingStatus.RESOLVED.value:
+                if completed_plugins is not None and not set(old.source_plugins).issubset(
+                    completed_plugins
+                ):
+                    continue
                 old.status = FindingStatus.RESOLVED.value
                 session.add(
                     FindingHistory(
