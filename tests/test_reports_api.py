@@ -21,12 +21,15 @@ def test_pdf_and_excel_reports(database, populated_assessment, tmp_path) -> None
     assert "Attack Path Analysis" in text
     assert "Pentest Methodology" in text
     assert "Post-Exploitation Reasoning" in text
+    assert "T1190" in text
     assert "Evidence Boundary" in text
     assert "SQL injection in search" in text
     workbook = load_workbook(xlsx, data_only=False)
     assert workbook.sheetnames == list(ExcelReportGenerator.SHEETS)
     assert workbook["Findings"]["D2"].value == "SQL injection in search"
+    assert "T1190" in workbook["Findings"]["P2"].value
     assert workbook["Attack Paths"]["B2"].value == "SQL injection to sensitive data impact"
+    assert "T1190" in workbook["Attack Path Findings"]["I2"].value
     assert workbook["Manual Review"]["D2"].value == "idor_bola"
     assert workbook["Findings"].freeze_panes == "A2"
 
@@ -52,8 +55,10 @@ async def test_api_auth_rbac_and_read_endpoints(database, config, admin, populat
         assert response.json()["counts"]["findings"] == 1
         findings = await client.get(f"/api/v1/assessments/{populated_assessment}/findings", headers=headers)
         assert findings.json()[0]["priority_score"] == 96.0
+        assert findings.json()[0]["mitre_attack"] == ["T1190"]
         paths = await client.get(f"/api/v1/assessments/{populated_assessment}/attack-paths", headers=headers)
         assert len(paths.json()) == 1
+        assert paths.json()[0]["mitre_attack"] == ["T1190", "T1213.006"]
         for suffix in (
             "reconnaissance",
             "pentest-phases",
@@ -65,6 +70,9 @@ async def test_api_auth_rbac_and_read_endpoints(database, config, admin, populat
             )
             assert response.status_code == 200
         assert len((await client.get("/api/v1/owasp-coverage", headers=headers)).json()) == 10
+        mitre = await client.get("/api/v1/mitre-attack", headers=headers)
+        assert mitre.status_code == 200
+        assert any(item["technique_id"] == "T1190" for item in mitre.json())
 
 
 async def test_cookie_mutation_requires_csrf(database, config, admin) -> None:

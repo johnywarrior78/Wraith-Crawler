@@ -119,7 +119,7 @@ def populated_assessment(database: Database) -> str:
             cve=[],
             owasp=["A03:2021"],
             capec=["CAPEC-66"],
-            mitre_attack=[],
+            mitre_attack=["T1190"],
             cvss=9.8,
             epss=0.9,
             kev=False,
@@ -155,6 +155,7 @@ def populated_assessment(database: Database) -> str:
             blast_radius="Training application database",
             evidence_boundary="Injection is confirmed; data access is modeled.",
             recommended_break_point="Use parameterized queries.",
+            mitre_attack=["T1190", "T1213.006"],
         )
         session.add(path)
         session.flush()
@@ -190,7 +191,7 @@ def populated_assessment(database: Database) -> str:
                 confidence="confirmed",
                 classification="confirmed",
                 rationale="SQLMap validation",
-                mitre_attack=[],
+                mitre_attack=["T1190"],
             )
         )
         session.add(AttackPathFinding(attack_path_id=path.id, finding_id=finding.id, role="chain_step"))

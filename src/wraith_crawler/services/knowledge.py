@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 
 from ..domain import AttackerNarrative, FindingCandidate, TechnologyRecord
+from ..mitre import ATTACK_CATALOG_VERSION, finding_attack_mappings
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +172,7 @@ LIFECYCLE_RULES: dict[str, tuple[re.Pattern[str], str, str, str]] = {
 
 
 class KnowledgeService:
-    VERSION = "2026.1"
+    VERSION = "2026.2"
 
     def enrich(self, candidate: FindingCandidate) -> FindingCandidate:
         mapping = MAPPINGS.get(candidate.finding_type)
@@ -183,6 +184,21 @@ class KnowledgeService:
                 candidate.remediation = mapping.remediation
         candidate.metadata["knowledge_version"] = self.VERSION
         candidate.metadata["knowledge_provenance"] = "wraith_builtin"
+        mitre_mappings = finding_attack_mappings(
+            candidate.finding_type,
+            metadata=candidate.metadata,
+            confidence=candidate.confidence.value,
+            validation_status=candidate.validation_status.value,
+            has_cve=bool(candidate.cve),
+        )
+        candidate.mitre_attack = sorted(
+            set(candidate.mitre_attack).union(
+                str(item["technique_id"]) for item in mitre_mappings
+            )
+        )
+        if mitre_mappings:
+            candidate.metadata["mitre_attack_mappings"] = mitre_mappings
+            candidate.metadata["mitre_attack_catalog_version"] = ATTACK_CATALOG_VERSION
         self._attacker_narrative(candidate)
         return candidate
 

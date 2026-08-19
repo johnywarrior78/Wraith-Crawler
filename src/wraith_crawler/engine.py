@@ -16,6 +16,7 @@ from .coverage import assessment_coverage
 from .domain import TargetInput, redact_text
 from .enums import AssessmentStatus, PentestPhase, PluginState
 from .inventory import SharedInventory
+from .mitre import technique_ids_for_capability
 from .persistence.database import Database
 from .persistence.models import (
     Application,
@@ -482,6 +483,7 @@ class ScanEngine:
                 metadata=finding.metadata_json,
                 fingerprint=finding.fingerprint,
                 source_plugins=finding.source_plugins,
+                mitre_attack=finding.mitre_attack,
             )
             for finding in findings
         ]
@@ -549,6 +551,7 @@ class ScanEngine:
                 blast_radius=item.blast_radius,
                 evidence_boundary=item.evidence_boundary,
                 recommended_break_point=item.recommended_break_point,
+                mitre_attack=item.mitre_attack,
                 critical_path_labels=item.critical_path_labels,
             )
             session.add(path)
@@ -673,6 +676,11 @@ class ScanEngine:
                         classification=classification,
                         confidence=confidence,
                         rationale=rationale,
+                        mitre_attack=(
+                            list(technique_ids_for_capability(capability))
+                            if sequence == 1
+                            else []
+                        ),
                         technical_impact=item.technical_impact if sequence == 2 else None,
                         business_impact=item.business_impact if sequence == 2 else None,
                     )

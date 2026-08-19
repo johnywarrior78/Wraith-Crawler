@@ -13,7 +13,7 @@ It is designed for repeatable assessment workflows where scope, evidence, scanne
 - Phase-driven workflow: Reconnaissance → Scanning → Enumeration → Safe Validation → Analysis → Attack Path → Post-Exploitation Reasoning.
 - Built-in checks for HTTP behavior, TLS, headers, session cookies, CORS, forms, JavaScript, APIs, management/debug/health surfaces, directory listings, CMS/technology fingerprints, exposed files, and manual-review candidates.
 - Integrated ProjectDiscovery HTTPX, Katana, Nuclei, Dalfox, SQLMap, Nikto, and Retire.js adapters.
-- Evidence-backed finding lifecycle, scan-specific OWASP coverage, attacker narratives, attack paths, priorities, and scan history.
+- Evidence-backed finding lifecycle, scan-specific OWASP coverage, MITRE ATT&CK mappings, attacker narratives, attack paths, priorities, and scan history.
 - PostgreSQL persistence with Alembic migrations and stable read-only reporting views.
 - PDF and Excel reports, REST API, and nine provisioned Metabase dashboards.
 - Optional local LLM enrichment that cannot replace deterministic evidence or alter authoritative security facts.
@@ -124,6 +124,7 @@ Before submitting changes, read [CONTRIBUTING.md](CONTRIBUTING.md) and the [deve
 - [Backup and restore](docs/backup-restore.md)
 - [Database model](docs/database.md)
 - [Metabase](docs/metabase.md)
+- [MITRE ATT&CK mapping](docs/mitre-attack.md)
 - [OWASP coverage](docs/owasp-coverage.md)
 - [Testing](docs/testing.md)
 - [Security policy](SECURITY.md)

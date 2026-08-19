@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -20,6 +21,7 @@ from reportlab.platypus import (
 from sqlalchemy.orm import Session
 
 from ..domain import redact_text
+from ..mitre import technique_label
 from .data import ReportData, load_report_data
 
 INK = colors.HexColor("#172033")
@@ -180,6 +182,12 @@ class PDFReportGenerator:
                     Paragraph(f"{index}. {self._escape(path.title)}", styles["h2"]),
                     self._label_value("Score / priority", f"{path.score:.1f} / {path.priority}", styles),
                     self._label_value("Classification", f"{path.classification} ({path.confidence})", styles),
+                    self._label_value(
+                        "MITRE ATT&CK",
+                        "; ".join(technique_label(item) for item in path.mitre_attack)
+                        or "No evidence-bounded technique mapping",
+                        styles,
+                    ),
                     self._label_value("Attack Scenario", path.attack_scenario, styles),
                     self._label_value("Attacker Gain", path.attacker_gain, styles),
                     self._label_value("Next Attacker Step", path.next_step, styles),
@@ -200,6 +208,12 @@ class PDFReportGenerator:
                             f"Step {step.sequence} ({step.classification})", step.action, styles
                         ),
                         self._label_value("Capability", step.capability, styles),
+                        self._label_value(
+                            "MITRE ATT&CK",
+                            "; ".join(technique_label(item) for item in step.mitre_attack)
+                            or "No technique mapping",
+                            styles,
+                        ),
                         self._label_value("Evidence boundary", step.rationale, styles),
                     ]
                 )
@@ -289,7 +303,12 @@ class PDFReportGenerator:
                 self._label_value("Priority rationale", self._format_mapping(finding.priority_rationale), styles),
                 self._label_value(
                     "Mappings",
-                    ", ".join([*finding.owasp, *finding.cwe, *finding.cve, *finding.capec, *finding.mitre_attack]) or "None",
+                    ", ".join([*finding.owasp, *finding.cwe, *finding.cve, *finding.capec]) or "None",
+                    styles,
+                ),
+                self._label_value(
+                    "MITRE ATT&CK",
+                    self._mitre_finding_mappings(finding),
                     styles,
                 ),
                 self._label_value("Remediation", finding.remediation, styles),
@@ -424,7 +443,8 @@ class PDFReportGenerator:
                 "Attack-path outcomes after the validated weakness are models, not post-exploitation results. Authorization, "
                 "business logic, internal logging, data-at-rest controls, and authenticated role boundaries may require separate "
                 "manual assessment. A finding marked suspected or manual review must not be treated as confirmed until an analyst "
-                "completes safe validation.",
+                "completes safe validation. MITRE ATT&CK mappings describe observed preconditions or plausible adversary "
+                "behaviors; they do not claim that Wraith executed those behaviors.",
                 styles["body"],
             ),
         ]
@@ -482,6 +502,24 @@ class PDFReportGenerator:
         if not isinstance(value, dict):
             return str(value)
         return "; ".join(f"{key}={item}" for key, item in value.items())
+
+    @staticmethod
+    def _mitre_finding_mappings(finding: Any) -> str:
+        metadata = finding.metadata_json if isinstance(finding.metadata_json, dict) else {}
+        details = metadata.get("mitre_attack_mappings", [])
+        rendered: list[str] = []
+        if isinstance(details, list):
+            for item in details:
+                if not isinstance(item, dict) or not item.get("technique_id"):
+                    continue
+                rendered.append(
+                    f"{technique_label(str(item['technique_id']))} "
+                    f"[{item.get('relationship', 'related')}; "
+                    f"{item.get('classification', 'inferred')}]"
+                )
+        if not rendered:
+            rendered = [technique_label(item) for item in finding.mitre_attack]
+        return "; ".join(rendered) or "No evidence-bounded technique mapping"
 
     @staticmethod
     def _escape(value: object) -> str:

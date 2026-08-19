@@ -539,6 +539,7 @@ class AttackPath(Base):
     blast_radius: Mapped[str] = mapped_column(Text, nullable=False)
     evidence_boundary: Mapped[str] = mapped_column(Text, nullable=False)
     recommended_break_point: Mapped[str] = mapped_column(Text, nullable=False)
+    mitre_attack: Mapped[list[str]] = mapped_column(JSON_VALUE, default=list, nullable=False)
     critical_path_labels: Mapped[list[str]] = mapped_column(JSON_VALUE, default=list, nullable=False)
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
@@ -647,6 +648,7 @@ class PostExploitationStep(Base):
     classification: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     confidence: Mapped[str] = mapped_column(String(32), nullable=False)
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    mitre_attack: Mapped[list[str]] = mapped_column(JSON_VALUE, default=list, nullable=False)
     technical_impact: Mapped[str | None] = mapped_column(Text)
     business_impact: Mapped[str | None] = mapped_column(Text)
 

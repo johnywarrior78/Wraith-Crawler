@@ -24,3 +24,5 @@ Alembic creates a dedicated `reporting` schema with stable views:
 The installer grants `wraith_metabase_reader` CONNECT on the Wraith database, USAGE on `reporting`, and SELECT on reporting views only. It has no transactional-schema access, DML, DDL, ownership, or role-management rights.
 
 View definitions live in `persistence/reporting_views.py`, are versioned by Alembic, and are exercised by doctor. Add indexes to underlying tables before introducing materialized views. Any future materialized view must expose its refresh timestamp.
+
+ATT&CK technique arrays are exposed by `vw_findings_current`, `vw_attack_paths`, `vw_attack_path_steps`, `vw_attack_path_findings`, and `vw_post_exploitation_steps`.

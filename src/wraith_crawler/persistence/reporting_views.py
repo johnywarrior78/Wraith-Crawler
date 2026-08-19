@@ -47,7 +47,8 @@ VIEW_DEFINITIONS: dict[str, str] = {
         SELECT f.id AS finding_id, f.assessment_id, f.application_id, f.fingerprint,
                f.finding_type, f.family, f.title, f.asset, f.severity, f.confidence,
                f.validation_status, f.status, f.priority_score, f.priority_level,
-               f.cvss, f.epss, f.kev, f.owasp, f.cwe, f.cve, f.first_seen, f.last_seen,
+               f.cvss, f.epss, f.kev, f.owasp, f.cwe, f.cve, f.mitre_attack,
+               f.first_seen, f.last_seen,
                f.manual_review, f.attack_path_participation
         FROM findings f
         WHERE f.false_positive = FALSE
@@ -114,21 +115,23 @@ VIEW_DEFINITIONS: dict[str, str] = {
         SELECT ap.id AS attack_path_id, ap.assessment_id, ap.application_id, ap.title,
                ap.confidence, ap.classification, ap.score, ap.priority, ap.status,
                ap.attacker_gain, ap.technical_impact, ap.business_impact,
-               ap.blast_radius, ap.recommended_break_point, ap.first_seen, ap.last_seen
-               , ap.critical_path_labels
+               ap.blast_radius, ap.recommended_break_point, ap.first_seen, ap.last_seen,
+               ap.critical_path_labels, ap.mitre_attack
         FROM attack_paths ap
     """,
     "vw_attack_path_steps": """
         SELECT e.attack_path_id, e.id AS edge_id, s.node_type AS source_type,
                s.label AS source_label, e.relationship, d.node_type AS destination_type,
-               d.label AS destination_label, e.confidence, e.classification, e.rationale
+               d.label AS destination_label, e.confidence, e.classification, e.rationale,
+               e.mitre_attack
         FROM attack_path_edges e
         JOIN attack_path_nodes s ON s.id = e.source_node_id
         JOIN attack_path_nodes d ON d.id = e.destination_node_id
     """,
     "vw_attack_path_findings": """
         SELECT apf.attack_path_id, apf.finding_id, apf.role, f.application_id,
-               f.finding_type, f.title, f.severity, f.priority_level, f.validation_status
+               f.finding_type, f.title, f.severity, f.priority_level, f.validation_status,
+               f.mitre_attack
         FROM attack_path_findings apf
         JOIN findings f ON f.id = apf.finding_id
     """,
@@ -136,7 +139,8 @@ VIEW_DEFINITIONS: dict[str, str] = {
         SELECT p.id AS post_exploitation_step_id, p.assessment_id,
                ap.application_id, p.attack_path_id, p.source_finding_id,
                p.sequence, p.action, p.capability, p.classification,
-               p.confidence, p.rationale, p.technical_impact, p.business_impact
+               p.confidence, p.rationale, p.mitre_attack,
+               p.technical_impact, p.business_impact
         FROM post_exploitation_steps p
         JOIN attack_paths ap ON ap.id = p.attack_path_id
     """,

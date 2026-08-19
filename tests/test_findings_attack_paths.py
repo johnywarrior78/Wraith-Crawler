@@ -94,3 +94,5 @@ def test_attack_path_never_marks_inference_confirmed() -> None:
 def test_attack_path_breakpoint_uses_remediation() -> None:
     path = AttackPathEngine().build("https://example.com", [path_finding("1", "sql_injection")])[0]
     assert path.recommended_break_point == "Fix sql_injection"
+    assert path.mitre_attack == ["T1190", "T1213.006"]
+    assert any("T1190" in edge.mitre_attack for edge in path.edges)

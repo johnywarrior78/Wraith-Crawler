@@ -16,6 +16,7 @@ from .coverage import coverage_matrix
 from .domain import TargetInput
 from .engine import ScanEngine
 from .enums import RoleName
+from .mitre import attack_catalog
 from .persistence.database import Database
 from .persistence.models import (
     Application,
@@ -471,6 +472,10 @@ def create_app(config: AppConfig | None = None, database: Database | None = None
     @app.get("/api/v1/owasp-coverage")
     def owasp_coverage(_user: Annotated[User, Depends(current_user)]) -> list[dict[str, Any]]:
         return coverage_matrix()
+
+    @app.get("/api/v1/mitre-attack")
+    def mitre_attack(_user: Annotated[User, Depends(current_user)]) -> list[dict[str, object]]:
+        return attack_catalog()
 
     @app.post("/api/v1/assessments/{assessment_id}/reports", status_code=201)
     def create_report(

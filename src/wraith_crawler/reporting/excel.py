@@ -13,6 +13,7 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from sqlalchemy.orm import Session
 
 from ..domain import redact_text
+from ..mitre import technique_label
 from .data import ReportData, load_report_data
 
 NAVY = "102A43"
@@ -126,7 +127,8 @@ class ExcelReportGenerator:
     def _findings(self, sheet: Any, data: ReportData) -> None:
         headers = [
             "Finding ID", "Type", "Family", "Title", "Asset", "Severity", "Priority", "Priority Score",
-            "Confidence", "Validation", "Status", "Manual Review", "CWE", "CVE", "OWASP", "CVSS", "EPSS",
+            "Confidence", "Validation", "Status", "Manual Review", "CWE", "CVE", "OWASP",
+            "MITRE ATT&CK", "CVSS", "EPSS",
             "KEV", "Parameters", "Affected Endpoint Count", "Remediation", "First Seen", "Last Seen",
             "Evidence Summary",
             "How an Attacker Exploits", "Capability Gained", "Next Realistic Step",
@@ -139,7 +141,8 @@ class ExcelReportGenerator:
             rows.append([
                 f.id, f.finding_type, f.family, f.title, f.asset, f.severity, f.priority_level, f.priority_score,
                 f.confidence, f.validation_status, f.status, f.manual_review, ", ".join(f.cwe), ", ".join(f.cve),
-                ", ".join(f.owasp), f.cvss, f.epss, f.kev, ", ".join(f.parameters), len(f.affected_endpoints),
+                ", ".join(f.owasp), " | ".join(technique_label(item) for item in f.mitre_attack),
+                f.cvss, f.epss, f.kev, ", ".join(f.parameters), len(f.affected_endpoints),
                 f.remediation, f.first_seen, f.last_seen,
                 " | ".join(
                     record.summary + (" [redacted]" if record.sensitive else "")
@@ -159,10 +162,10 @@ class ExcelReportGenerator:
         self._write_table(sheet, headers, rows, "FindingsTable")
         for cell in sheet["H"][1:]:
             cell.number_format = "0.0"
-        for col in ("P", "Q"):
+        for col in ("Q", "R"):
             for cell in sheet[col][1:]:
                 cell.number_format = "0.00"
-        for col in ("V", "W"):
+        for col in ("W", "X"):
             for cell in sheet[col][1:]:
                 cell.number_format = "yyyy-mm-dd hh:mm"
         if rows:
@@ -270,31 +273,32 @@ class ExcelReportGenerator:
         self._write_table(sheet, headers, rows, "ManualReviewTable")
 
     def _paths(self, sheet: Any, data: ReportData) -> None:
-        headers = ["Attack Path ID", "Title", "Score", "Priority", "Confidence", "Classification", "Status", "Critical Path Labels", "Attack Scenario", "Attacker Gain", "Next Step", "Technical Impact", "Business Impact", "Blast Radius", "Evidence Boundary", "Recommended Break Point"]
-        rows = [[p.id, p.title, p.score, p.priority, p.confidence, p.classification, p.status, ", ".join(p.critical_path_labels), p.attack_scenario, p.attacker_gain, p.next_step, p.technical_impact, p.business_impact, p.blast_radius, p.evidence_boundary, p.recommended_break_point] for p in data.attack_paths]
+        headers = ["Attack Path ID", "Title", "Score", "Priority", "Confidence", "Classification", "Status", "Critical Path Labels", "MITRE ATT&CK", "Attack Scenario", "Attacker Gain", "Next Step", "Technical Impact", "Business Impact", "Blast Radius", "Evidence Boundary", "Recommended Break Point"]
+        rows = [[p.id, p.title, p.score, p.priority, p.confidence, p.classification, p.status, ", ".join(p.critical_path_labels), " | ".join(technique_label(item) for item in p.mitre_attack), p.attack_scenario, p.attacker_gain, p.next_step, p.technical_impact, p.business_impact, p.blast_radius, p.evidence_boundary, p.recommended_break_point] for p in data.attack_paths]
         self._write_table(sheet, headers, rows, "AttackPathsTable")
 
     def _steps(self, sheet: Any, data: ReportData) -> None:
         nodes = {node.id: node for node in data.attack_nodes}
-        headers = ["Attack Path ID", "Step ID", "Source Type", "Source", "Relationship", "Destination Type", "Destination", "Confidence", "Classification", "Rationale", "Evidence Reference"]
+        headers = ["Attack Path ID", "Step ID", "Source Type", "Source", "Relationship", "Destination Type", "Destination", "Confidence", "Classification", "Rationale", "Evidence Reference", "MITRE ATT&CK"]
         rows = []
         for edge in data.attack_edges:
             source = nodes.get(edge.source_node_id)
             destination = nodes.get(edge.destination_node_id)
-            rows.append([edge.attack_path_id, edge.id, source.node_type if source else "", source.label if source else "", edge.relationship, destination.node_type if destination else "", destination.label if destination else "", edge.confidence, edge.classification, edge.rationale, edge.evidence_reference or ""])
+            rows.append([edge.attack_path_id, edge.id, source.node_type if source else "", source.label if source else "", edge.relationship, destination.node_type if destination else "", destination.label if destination else "", edge.confidence, edge.classification, edge.rationale, edge.evidence_reference or "", " | ".join(technique_label(item) for item in edge.mitre_attack)])
         self._write_table(sheet, headers, rows, "AttackStepsTable")
 
     def _post_exploitation(self, sheet: Any, data: ReportData) -> None:
         headers = [
             "Step ID", "Attack Path ID", "Source Finding ID", "Sequence", "Action",
-            "Capability", "Classification", "Confidence", "Rationale", "Technical Impact",
+            "Capability", "Classification", "Confidence", "Rationale", "MITRE ATT&CK", "Technical Impact",
             "Business Impact",
         ]
         rows = [
             [
                 step.id, step.attack_path_id, step.source_finding_id or "", step.sequence,
                 step.action, step.capability, step.classification, step.confidence,
-                step.rationale, step.technical_impact or "", step.business_impact or "",
+                step.rationale, " | ".join(technique_label(item) for item in step.mitre_attack),
+                step.technical_impact or "", step.business_impact or "",
             ]
             for step in data.post_exploitation_steps
         ]
@@ -302,11 +306,11 @@ class ExcelReportGenerator:
 
     def _path_findings(self, sheet: Any, data: ReportData) -> None:
         findings = {finding.id: finding for finding in data.findings}
-        headers = ["Attack Path ID", "Finding ID", "Role", "Finding Type", "Title", "Severity", "Priority", "Validation"]
+        headers = ["Attack Path ID", "Finding ID", "Role", "Finding Type", "Title", "Severity", "Priority", "Validation", "MITRE ATT&CK"]
         rows = []
         for link in data.attack_path_findings:
             finding = findings.get(link.finding_id)
-            rows.append([link.attack_path_id, link.finding_id, link.role, finding.finding_type if finding else "", finding.title if finding else "", finding.severity if finding else "", finding.priority_level if finding else "", finding.validation_status if finding else ""])
+            rows.append([link.attack_path_id, link.finding_id, link.role, finding.finding_type if finding else "", finding.title if finding else "", finding.severity if finding else "", finding.priority_level if finding else "", finding.validation_status if finding else "", " | ".join(technique_label(item) for item in finding.mitre_attack) if finding else ""])
         self._write_table(sheet, headers, rows, "AttackPathFindingsTable")
 
     def _metrics(self, sheet: Any, data: ReportData) -> None:

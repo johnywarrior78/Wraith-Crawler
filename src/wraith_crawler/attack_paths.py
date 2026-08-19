@@ -6,6 +6,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
+from .mitre import technique_ids_for_capability
+
 
 @dataclass(slots=True)
 class PathFinding:
@@ -22,6 +24,7 @@ class PathFinding:
     metadata: dict[str, Any] = field(default_factory=dict)
     fingerprint: str | None = None
     source_plugins: list[str] = field(default_factory=list)
+    mitre_attack: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -68,6 +71,7 @@ class AttackPathResult:
     blast_radius: str
     evidence_boundary: str
     recommended_break_point: str
+    mitre_attack: list[str] = field(default_factory=list)
     critical_path_labels: list[str] = field(default_factory=list)
 
 
@@ -276,6 +280,9 @@ class AttackPathEngine:
                 "The operator supplied this public target and HTTP reachability was observed.",
             )
         ]
+        mapped_techniques: set[str] = {
+            technique_id for finding in findings for technique_id in finding.mitre_attack
+        }
         previous = "application"
         for index, finding in enumerate(findings):
             endpoint = finding.endpoints[0] if finding.endpoints else finding.asset
@@ -350,6 +357,7 @@ class AttackPathEngine:
                     f"Finding {finding.id} supplies the recorded evidence for this step.",
                     finding.id,
                     finding.source_plugins[0] if finding.source_plugins else None,
+                    finding.mitre_attack,
                 )
             )
             previous = key
@@ -357,6 +365,10 @@ class AttackPathEngine:
         opportunity_key = "opportunity:next"
         impact_key = "impact:technical"
         business_key = "impact:business"
+        capability_techniques = list(
+            technique_ids_for_capability(narrative.get("capability", "follow_on_access"))
+        )
+        mapped_techniques.update(capability_techniques)
         nodes.extend(
             [
                 PathNode(capability_key, "attacker_capability", narrative["gain"], confidence, "inferred"),
@@ -374,6 +386,7 @@ class AttackPathEngine:
                     confidence,
                     "inferred",
                     "Capability is a bounded inference from the validated weakness; it was not exercised.",
+                    mitre_attack=capability_techniques,
                 ),
                 PathEdge(
                     capability_key,
@@ -382,6 +395,7 @@ class AttackPathEngine:
                     confidence,
                     "inferred",
                     "This is the realistic next attacker action; Wraith did not execute it.",
+                    mitre_attack=capability_techniques,
                 ),
                 PathEdge(
                     opportunity_key,
@@ -428,6 +442,7 @@ class AttackPathEngine:
             blast_radius="Bounded to the affected application and any service privileges evidenced by the findings.",
             evidence_boundary=boundary,
             recommended_break_point=break_finding.remediation,
+            mitre_attack=sorted(mapped_techniques),
         )
 
     @staticmethod
