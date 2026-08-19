@@ -231,6 +231,7 @@ class FindingPersistenceService:
                 priority_score=decision.score,
                 priority_level=decision.level.value,
                 priority_rationale=decision.rationale,
+                attacker_narrative=candidate.attacker_narrative.model_dump(mode="json"),
                 metadata_json=candidate.metadata,
                 status=FindingStatus.NEW.value,
                 first_seen=now,

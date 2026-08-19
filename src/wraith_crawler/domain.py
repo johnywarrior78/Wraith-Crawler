@@ -90,9 +90,17 @@ class TargetInput(BaseModel):
 class EvidenceRecord(BaseModel):
     kind: str
     summary: str
+    source_plugin: str | None = None
+    target: str | None = None
+    endpoint: str | None = None
+    method: str | None = None
+    parameter: str | None = None
+    status_code: int | None = None
+    matched_indicator: str | None = None
     location: str | None = None
     request: dict[str, Any] | None = None
     response: dict[str, Any] | None = None
+    raw_output_reference: str | None = None
     observed_at: datetime = Field(default_factory=utcnow)
     fingerprint: str | None = None
     sensitive: bool = False
@@ -169,7 +177,27 @@ class TechnologyRecord(BaseModel):
     evidence: list[str] = Field(default_factory=list)
     source_plugin: str
     eol_state: str | None = None
+    eol_date: str | None = None
+    supported: bool | None = None
+    lifecycle_source: str | None = None
+    lifecycle_evidence: list[str] = Field(default_factory=list)
     vulnerability_references: list[str] = Field(default_factory=list)
+    vulnerability_data: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AttackerNarrative(BaseModel):
+    what_was_found: str = ""
+    where: str = ""
+    validation: str = ""
+    exploitation: str = ""
+    capability_gained: str = ""
+    next_realistic_step: str = ""
+    chain_opportunities: list[str] = Field(default_factory=list)
+    confirmed: list[str] = Field(default_factory=list)
+    inferred: list[str] = Field(default_factory=list)
+    technical_impact: str = ""
+    business_impact: str = ""
+    remediation_break_point: str = ""
 
 
 class FindingCandidate(BaseModel):
@@ -197,6 +225,7 @@ class FindingCandidate(BaseModel):
     remediation: str
     references: list[str] = Field(default_factory=list)
     manual_review: bool = False
+    attacker_narrative: AttackerNarrative = Field(default_factory=AttackerNarrative)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @property
@@ -204,7 +233,11 @@ class FindingCandidate(BaseModel):
         material = {
             "type": self.finding_type,
             "asset": self.asset.lower(),
-            "endpoints": sorted(self.affected_endpoints),
+            "endpoints": (
+                [str(self.metadata["aggregate_scope"])]
+                if self.metadata.get("aggregate_scope")
+                else sorted(self.affected_endpoints)
+            ),
             "method": self.method,
             "parameters": sorted(self.parameters),
             "component": self.metadata.get("component"),
@@ -223,5 +256,11 @@ class PluginResult(BaseModel):
     technologies: list[TechnologyRecord] = Field(default_factory=list)
     observations: list[RawObservation] = Field(default_factory=list)
     findings: list[FindingCandidate] = Field(default_factory=list)
+    security_question: str | None = None
+    tests_attempted: int = 0
+    tests_completed: int = 0
+    targets_tested: list[str] = Field(default_factory=list)
+    next_tests: list[str] = Field(default_factory=list)
+    attacker_capabilities: list[str] = Field(default_factory=list)
     metrics: dict[str, Any] = Field(default_factory=dict)
     partial_output_trustworthy: bool = False

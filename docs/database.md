@@ -2,7 +2,9 @@
 
 PostgreSQL is the production system of record. Alembic owns schema changes. Run `alembic upgrade head` using `WRAITH_DATABASE_URL`; never modify production tables manually.
 
-The normalized schema covers users/roles/sessions, applications and assessments, assets/endpoints/parameters/technologies, plugin executions and scan metrics, observations/evidence/candidates/findings/history/priorities, knowledge and LLM triage, reports, manual review, and attack paths/nodes/edges/findings/capabilities/impacts.
+The normalized schema covers users/roles/sessions, applications and assessments, assets/endpoints/parameters/technologies and lifecycle evidence, plugin executions and scan metrics, observations/evidence/candidates/findings/history/priorities/attacker narratives, knowledge and LLM triage, scan-specific OWASP coverage, pentest-phase progress, reports, manual review, attack paths/nodes/edges/findings/capabilities/impacts, and post-exploitation reasoning steps.
+
+Migration `0003` adds the methodology, lifecycle, coverage, and post-exploitation fields without deleting assessment history. Normal installation and upgrade workflows run `alembic upgrade head` before starting the API.
 
 Identity and dashboard paths are indexed by application, assessment, status, severity, priority, plugin, first/last seen, and time. JSONB is limited to flexible metadata, scanner payload fragments, mappings, and inventory evidence. Credentials and session tokens are never stored in plaintext: passwords use Argon2id and session/CSRF tokens are SHA-256 digests.
 

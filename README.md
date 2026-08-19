@@ -10,9 +10,10 @@ It is designed for repeatable assessment workflows where scope, evidence, scanne
 ## Highlights
 
 - Strict HTTP(S) scope enforcement and bounded concurrency, rate, depth, and timeout controls.
-- Built-in checks for HTTP behavior, TLS, headers, session cookies, CORS, forms, JavaScript, APIs, directory listings, CMS/technology fingerprints, exposed files, and manual-review candidates.
+- Phase-driven workflow: Reconnaissance → Scanning → Enumeration → Safe Validation → Analysis → Attack Path → Post-Exploitation Reasoning.
+- Built-in checks for HTTP behavior, TLS, headers, session cookies, CORS, forms, JavaScript, APIs, management/debug/health surfaces, directory listings, CMS/technology fingerprints, exposed files, and manual-review candidates.
 - Integrated ProjectDiscovery HTTPX, Katana, Nuclei, Dalfox, SQLMap, Nikto, and Retire.js adapters.
-- Evidence-backed finding lifecycle, OWASP/CWE mappings, attack paths, priorities, and scan history.
+- Evidence-backed finding lifecycle, scan-specific OWASP coverage, attacker narratives, attack paths, priorities, and scan history.
 - PostgreSQL persistence with Alembic migrations and stable read-only reporting views.
 - PDF and Excel reports, REST API, and nine provisioned Metabase dashboards.
 - Optional local LLM enrichment that cannot replace deterministic evidence or alter authoritative security facts.

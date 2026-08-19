@@ -18,8 +18,10 @@ class PathFinding:
     confidence: str
     validation_status: str
     remediation: str
+    parameters: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     fingerprint: str | None = None
+    source_plugins: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -75,6 +77,7 @@ CHAIN_RULES: tuple[tuple[frozenset[str], dict[str, str]], ...] = (
         {
             "title": "Client source disclosure to unauthorized API capability",
             "gain": "A credential or token usable against a reachable API",
+            "capability": "api_access",
             "next": "Attempt only authorized API operations associated with the exposed credential",
             "technical": "Unauthorized API actions or sensitive data access",
             "business": "Data disclosure, account abuse, or third-party service cost",
@@ -85,6 +88,7 @@ CHAIN_RULES: tuple[tuple[frozenset[str], dict[str, str]], ...] = (
         {
             "title": "Browsable artifacts expose backend credentials",
             "gain": "Knowledge of deployment artifacts and a backend credential",
+            "capability": "secret_acquisition",
             "next": "Model access to the corresponding authorized backend service",
             "technical": "Backend service access and possible application compromise",
             "business": "Sensitive data exposure and operational disruption",
@@ -95,6 +99,7 @@ CHAIN_RULES: tuple[tuple[frozenset[str], dict[str, str]], ...] = (
         {
             "title": "API documentation enables unauthorized object access",
             "gain": "A map of sensitive API objects and an access-control bypass candidate",
+            "capability": "authorization_bypass",
             "next": "Validate cross-object access with approved test identities",
             "technical": "Unauthorized object or record access",
             "business": "Customer data disclosure or fraudulent changes",
@@ -105,6 +110,7 @@ CHAIN_RULES: tuple[tuple[frozenset[str], dict[str, str]], ...] = (
         {
             "title": "Client-side injection increases account abuse potential",
             "gain": "Script execution in the victim origin with access permitted by cookie controls",
+            "capability": "arbitrary_javascript_execution",
             "next": "Model authorized user actions reachable from the injected context",
             "technical": "Account actions or session misuse within browser control boundaries",
             "business": "Account compromise, fraud, or unauthorized data access",
@@ -115,21 +121,94 @@ CHAIN_RULES: tuple[tuple[frozenset[str], dict[str, str]], ...] = (
 SINGLE_RULES: dict[str, dict[str, str]] = {
     "sql_injection": {
         "gain": "Database query manipulation",
+        "capability": "sql_query_manipulation",
         "next": "Model exposure of application data and credential material without dumping data",
         "technical": "Data confidentiality and integrity loss; possible application compromise",
         "business": "Sensitive data breach, fraud, and service disruption",
     },
     "secret_exposure": {
         "gain": "Possession of a disclosed credential or token",
+        "capability": "secret_acquisition",
         "next": "Identify the in-scope service and permissions associated with the secret",
         "technical": "Unauthorized service capability, bounded by the secret's privileges",
         "business": "Data exposure, fraudulent activity, or unexpected third-party charges",
     },
     "cross_site_scripting": {
         "gain": "Script execution in a user's browser within the affected origin",
+        "capability": "arbitrary_javascript_execution",
         "next": "Model user actions and data reachable from that browser context",
         "technical": "User-context data access and actions; HttpOnly cookies remain unreadable",
         "business": "Account abuse, phishing, and loss of user trust",
+    },
+    "source_map_exposure": {
+        "gain": "Original source structure and hidden client-side references",
+        "capability": "sensitive_information_disclosure",
+        "next": "Review disclosed source names and content for hidden endpoints and redacted secret matches",
+        "technical": "Endpoint, source, and build-metadata disclosure",
+        "business": "Reduced attacker effort and possible proprietary source or credential exposure",
+    },
+    "directory_listing": {
+        "gain": "Browsable server-side file and artifact discovery",
+        "capability": "file_discovery",
+        "next": "Review listed in-scope files for backups, configuration, source, and logs",
+        "technical": "Potential file, configuration, or credential disclosure",
+        "business": "Sensitive data exposure and increased application-compromise likelihood",
+    },
+    "sensitive_file_exposure": {
+        "gain": "Direct access to a sensitive deployment or application artifact",
+        "capability": "file_disclosure",
+        "next": "Identify and revoke any exposed credentials without using them against external services",
+        "technical": "Configuration, source, credential, or database disclosure",
+        "business": "Data breach, service abuse, or application compromise",
+    },
+    "idor_bola": {
+        "gain": "A candidate object-level authorization bypass requiring approved identity comparison",
+        "capability": "authorization_bypass",
+        "next": "Validate cross-object access with two operator-approved test identities",
+        "technical": "Potential unauthorized object access and identifier enumeration",
+        "business": "Cross-customer data exposure or unauthorized changes",
+    },
+    "anonymous_sensitive_api": {
+        "gain": "Anonymous access to an API response with sensitive data fields",
+        "capability": "api_access",
+        "next": "Confirm whether the returned fields and records are intentionally public",
+        "technical": "Potential unauthorized sensitive-data access",
+        "business": "Privacy breach, regulatory exposure, or customer harm",
+    },
+    "ssrf": {
+        "gain": "A candidate server-side outbound request primitive",
+        "capability": "internal_service_interaction",
+        "next": "Use an operator-controlled public callback to validate server-side fetching",
+        "technical": "Potential access to services not directly reachable by the attacker",
+        "business": "Internal data exposure or cloud-service abuse if separately confirmed",
+    },
+    "open_redirect": {
+        "gain": "Control of a trusted-origin redirect destination",
+        "capability": "trusted_origin_redirect",
+        "next": "Review authentication and invitation flows for redirect chaining",
+        "technical": "Phishing and authentication-flow abuse opportunity",
+        "business": "Brand abuse, credential theft, and user trust impact",
+    },
+    "debug_interface_exposure": {
+        "gain": "Access to a public diagnostic or interactive debug surface",
+        "capability": "debug_surface_access",
+        "next": "Determine which disclosed debug functions are reachable without invoking state-changing actions",
+        "technical": "Internal implementation disclosure and possible debug-only application control",
+        "business": "Sensitive-data exposure or application compromise if dangerous functions are enabled",
+    },
+    "management_metrics_exposure": {
+        "gain": "Operational knowledge of application processes and dependencies",
+        "capability": "operational_information_disclosure",
+        "next": "Correlate only the disclosed service names and versions with the authorized attack surface",
+        "technical": "Infrastructure and runtime details reduce the effort needed for targeted attacks",
+        "business": "Increased compromise likelihood through precise service targeting",
+    },
+    "detailed_health_exposure": {
+        "gain": "Knowledge of backend service topology and component health",
+        "capability": "service_topology_disclosure",
+        "next": "Review whether named dependencies are otherwise reachable within the authorized scope",
+        "technical": "Backend service and failure-state disclosure",
+        "business": "Reduced attacker effort and increased risk to dependent systems",
     },
 }
 
@@ -199,6 +278,57 @@ class AttackPathEngine:
         ]
         previous = "application"
         for index, finding in enumerate(findings):
+            endpoint = finding.endpoints[0] if finding.endpoints else finding.asset
+            endpoint_key = f"endpoint:{hashlib.sha256(endpoint.encode()).hexdigest()[:16]}"
+            if not any(node.key == endpoint_key for node in nodes):
+                nodes.append(
+                    PathNode(
+                        endpoint_key,
+                        "endpoint_api",
+                        endpoint,
+                        finding.confidence,
+                        "confirmed",
+                        finding.id,
+                    )
+                )
+                edges.append(
+                    PathEdge(
+                        previous,
+                        endpoint_key,
+                        "can reach",
+                        finding.confidence,
+                        "confirmed",
+                        f"Finding {finding.id} identifies the affected reachable endpoint.",
+                        finding.id,
+                        finding.source_plugins[0] if finding.source_plugins else None,
+                    )
+                )
+            previous = endpoint_key
+            if finding.parameters:
+                parameter_key = f"parameter:{finding.id}:{finding.parameters[0]}"
+                nodes.append(
+                    PathNode(
+                        parameter_key,
+                        "parameter",
+                        finding.parameters[0],
+                        finding.confidence,
+                        "confirmed",
+                        finding.id,
+                    )
+                )
+                edges.append(
+                    PathEdge(
+                        previous,
+                        parameter_key,
+                        "accepts input through",
+                        finding.confidence,
+                        "confirmed",
+                        "The canonical finding records this affected parameter.",
+                        finding.id,
+                        finding.source_plugins[0] if finding.source_plugins else None,
+                    )
+                )
+                previous = parameter_key
             key = f"finding:{finding.id}"
             nodes.append(
                 PathNode(
@@ -219,15 +349,20 @@ class AttackPathEngine:
                     "confirmed" if finding.validation_status == "confirmed" else "inferred",
                     f"Finding {finding.id} supplies the recorded evidence for this step.",
                     finding.id,
+                    finding.source_plugins[0] if finding.source_plugins else None,
                 )
             )
             previous = key
         capability_key = "capability:gain"
+        opportunity_key = "opportunity:next"
         impact_key = "impact:technical"
+        business_key = "impact:business"
         nodes.extend(
             [
                 PathNode(capability_key, "attacker_capability", narrative["gain"], confidence, "inferred"),
+                PathNode(opportunity_key, "attacker_capability", narrative["next"], confidence, "inferred"),
                 PathNode(impact_key, "sensitive_data", narrative["technical"], confidence, "speculative"),
+                PathNode(business_key, "business_impact", narrative["business"], "low", "speculative"),
             ]
         )
         edges.extend(
@@ -242,11 +377,27 @@ class AttackPathEngine:
                 ),
                 PathEdge(
                     capability_key,
+                    opportunity_key,
+                    "creates next opportunity",
+                    confidence,
+                    "inferred",
+                    "This is the realistic next attacker action; Wraith did not execute it.",
+                ),
+                PathEdge(
+                    opportunity_key,
                     impact_key,
-                    "could progress to",
+                    "could progress to technical impact",
                     "medium",
                     "speculative",
                     "Impact depends on privileges, data, and controls not fully observable externally.",
+                ),
+                PathEdge(
+                    impact_key,
+                    business_key,
+                    "could cause business impact",
+                    "low",
+                    "speculative",
+                    "Business impact requires organization-specific data and process context.",
                 ),
             ]
         )
@@ -268,7 +419,7 @@ class AttackPathEngine:
             nodes=nodes,
             edges=edges,
             finding_ids=finding_keys,
-            capabilities=[narrative["gain"]],
+            capabilities=[narrative.get("capability", "follow_on_access")],
             attack_scenario=" -> ".join(["External attacker", application, *[f.title for f in findings]]),
             attacker_gain=narrative["gain"],
             next_step=narrative["next"],
@@ -297,8 +448,27 @@ class AttackPathEngine:
         validation = 15 if confirmed else 6
         chain = min(chain_length * 5, 15)
         sensitive = 8 if any(f.metadata.get("sensitive_context") for f in findings) else 0
+        authentication = -8 if any(f.metadata.get("authentication_required") for f in findings) else 0
+        blast_radius = max(
+            (float(f.metadata.get("blast_radius", 0) or 0) for f in findings), default=0
+        )
+        administrative = 8 if any(f.metadata.get("administrative_access") for f in findings) else 0
         prerequisites = max(0, 5 - (chain_length - 1) * 2)
-        return round(min(100.0, severity + exposure + validation + chain + sensitive + prerequisites), 1)
+        return round(
+            min(
+                100.0,
+                severity
+                + exposure
+                + validation
+                + chain
+                + sensitive
+                + authentication
+                + min(10.0, blast_radius)
+                + administrative
+                + prerequisites,
+            ),
+            1,
+        )
 
     @staticmethod
     def _priority(score: float) -> str:

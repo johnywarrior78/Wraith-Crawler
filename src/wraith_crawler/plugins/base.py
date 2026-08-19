@@ -10,7 +10,7 @@ from typing import Any
 
 from ..config import AppConfig
 from ..domain import PluginResult, TargetInput
-from ..enums import FailureReason, PluginState, ScanProfile
+from ..enums import FailureReason, PentestPhase, PluginState, ScanProfile
 from ..inventory import SharedInventory
 from ..scope import ScopeManager
 
@@ -45,6 +45,7 @@ class PluginContext:
     capabilities: set[str] = field(default_factory=lambda: {"seed_url"})
     http_snapshots: dict[str, HTTPResponseSnapshot] = field(default_factory=dict)
     javascript_content: dict[str, str] = field(default_factory=dict)
+    source_map_content: dict[str, str] = field(default_factory=dict)
     queues: CandidateQueues = field(default_factory=CandidateQueues)
     scratch_dir: Path | None = None
 
@@ -61,6 +62,9 @@ class AssessmentPlugin(ABC):
     cwe: tuple[str, ...] = ()
     automation_level: str = "automated"
     validation_strength: str = "observational"
+    phase: PentestPhase = PentestPhase.SCANNING
+    stage: int = 0
+    security_question: str = "What externally observable security condition does this check establish?"
 
     @abstractmethod
     async def run(self, context: PluginContext) -> PluginResult:

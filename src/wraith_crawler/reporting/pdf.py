@@ -95,19 +95,85 @@ class PDFReportGenerator:
                 ),
             ]
         )
-        story.extend(self._attack_paths(data, styles))
+        story.extend(self._scope_methodology_recon(data, styles))
+        story.extend(self._technology(data, styles))
         story.extend(self._owasp(data, styles))
         story.extend(self._findings(data, styles))
-        story.extend(self._technology(data, styles))
+        story.extend(self._attack_paths(data, styles))
         story.extend(self._plugins(data, styles))
         story.extend(self._methodology(data, styles))
         return story
 
+    def _scope_methodology_recon(
+        self, data: ReportData, styles: dict[str, ParagraphStyle]
+    ) -> list[object]:
+        story: list[object] = [PageBreak(), Paragraph("Scope", styles["h1"])]
+        story.append(
+            Paragraph(
+                f"The unauthenticated external assessment began from {self._escape(data.target)}. "
+                "Only operator-supplied scope and same-origin discoveries were tested; credentials were not guessed and destructive actions were not performed.",
+                styles["body"],
+            )
+        )
+        story.append(Paragraph("Pentest Methodology", styles["h1"]))
+        story.append(
+            Paragraph(
+                "Reconnaissance → Scanning → Enumeration → Safe Validation → Analysis → Attack Path → Post-Exploitation Reasoning. Confirmed observations remain separate from inferred capabilities and speculative impact.",
+                styles["body"],
+            )
+        )
+        phase_rows: list[list[object]] = [["Phase", "Status", "Tests", "Findings", "Limitations"]]
+        for phase in data.pentest_phases:
+            phase_rows.append(
+                [
+                    phase.phase.replace("_", " ").title(),
+                    phase.status,
+                    f"{phase.tests_completed}/{phase.tests_attempted}",
+                    phase.findings_count,
+                    Paragraph(self._escape("; ".join(phase.limitations) or "-"), styles["small"]),
+                ]
+            )
+        if len(phase_rows) == 1:
+            phase_rows.append(["Legacy assessment", "not recorded", "-", 0, "-"])
+        phase_table = Table(
+            phase_rows, colWidths=[38 * mm, 25 * mm, 22 * mm, 20 * mm, 67 * mm], repeatRows=1
+        )
+        phase_table.setStyle(self._table_style())
+        story.extend([phase_table, Spacer(1, 5 * mm), Paragraph("Reconnaissance Summary", styles["h1"])])
+        if data.assets:
+            for asset in data.assets:
+                story.append(
+                    Paragraph(
+                        self._escape(
+                            f"{asset.url} — HTTP {asset.http_status or 'unknown'}; "
+                            f"IPs {', '.join(asset.resolved_ips) or 'not resolved'}; "
+                            f"server {asset.server or 'not advertised'}; CDN/WAF {asset.cdn_waf or 'not identified'}; "
+                            f"redirects {' -> '.join(asset.redirect_chain) or 'none'}"
+                        ),
+                        styles["body"],
+                    )
+                )
+        else:
+            story.append(Paragraph("No reconnaissance assets were persisted.", styles["body"]))
+        story.extend(
+            [
+                Paragraph("Attack Surface", styles["h1"]),
+                Paragraph(
+                    f"The canonical inventory contains {len(data.endpoints)} endpoint(s), "
+                    f"{len(data.parameters)} parameter(s), and {len(data.technologies)} technology record(s).",
+                    styles["body"],
+                ),
+            ]
+        )
+        return story
+
     def _attack_paths(self, data: ReportData, styles: dict[str, ParagraphStyle]) -> list[object]:
-        story: list[object] = [PageBreak(), Paragraph("Attack Path Analysis", styles["h1"])]
+        story: list[object] = [
+            PageBreak(),
+            Paragraph("Critical Attack Paths / Attack Path Analysis", styles["h1"]),
+        ]
         if not data.attack_paths:
             story.append(Paragraph("No deterministic chain rule produced an attack path for this assessment.", styles["body"]))
-            return story
         for index, path in enumerate(data.attack_paths, 1):
             story.extend(
                 [
@@ -125,21 +191,64 @@ class PDFReportGenerator:
                     Spacer(1, 5 * mm),
                 ]
             )
+        story.append(Paragraph("Post-Exploitation Reasoning", styles["h1"]))
+        if data.post_exploitation_steps:
+            for step in data.post_exploitation_steps:
+                story.extend(
+                    [
+                        self._label_value(
+                            f"Step {step.sequence} ({step.classification})", step.action, styles
+                        ),
+                        self._label_value("Capability", step.capability, styles),
+                        self._label_value("Evidence boundary", step.rationale, styles),
+                    ]
+                )
+        else:
+            story.append(
+                Paragraph(
+                    "No deterministic attack path existed from which to derive bounded next-attacker-action reasoning.",
+                    styles["body"],
+                )
+            )
+        story.append(Paragraph("Recommended Attack-Path Break Points", styles["h1"]))
+        if data.attack_paths:
+            for path in data.attack_paths:
+                story.append(
+                    self._label_value(path.title, path.recommended_break_point, styles)
+                )
+        else:
+            story.append(Paragraph("No chain-specific break point was generated.", styles["body"]))
         return story
 
     def _owasp(self, data: ReportData, styles: dict[str, ParagraphStyle]) -> list[object]:
         story: list[object] = [PageBreak(), Paragraph("OWASP Top 10 Coverage", styles["h1"])]
-        rows: list[list[object]] = [["Category", "Automation", "Validation", "External limitation"]]
+        rows: list[list[object]] = [["Category", "Status / tests", "Findings", "Limitations / manual review"]]
         for entry in data.owasp_coverage:
             rows.append(
                 [
                     Paragraph(f"{entry['category']}<br/><b>{self._escape(str(entry['name']))}</b>", styles["small"]),
-                    Paragraph(self._escape(str(entry["automation_level"])), styles["small"]),
-                    Paragraph(self._escape(str(entry["validation_strength"])), styles["small"]),
-                    Paragraph(self._escape(str(entry["limitation"])), styles["small"]),
+                    Paragraph(
+                        self._escape(
+                            f"{entry.get('status', 'reference')} — "
+                            f"{entry.get('tests_completed', 0)}/{entry.get('tests_attempted', 0)}"
+                        ),
+                        styles["small"],
+                    ),
+                    str(entry.get("findings", 0)),
+                    Paragraph(
+                        self._escape(
+                            "; ".join(entry.get("limitations", [entry.get("limitation", "")]))
+                            + (
+                                " Manual: " + " | ".join(entry.get("manual_review_needs", []))
+                                if entry.get("manual_review_needs")
+                                else ""
+                            )
+                        ),
+                        styles["small"],
+                    ),
                 ]
             )
-        table = Table(rows, colWidths=[40 * mm, 23 * mm, 37 * mm, 72 * mm], repeatRows=1)
+        table = Table(rows, colWidths=[45 * mm, 35 * mm, 18 * mm, 74 * mm], repeatRows=1)
         table.setStyle(self._table_style())
         story.append(table)
         return story
@@ -185,6 +294,41 @@ class PDFReportGenerator:
                 ),
                 self._label_value("Remediation", finding.remediation, styles),
             ]
+            narrative = finding.attacker_narrative or {}
+            details.extend(
+                [
+                    self._label_value(
+                        "How an attacker could exploit it",
+                        narrative.get("exploitation", "Not recorded"),
+                        styles,
+                    ),
+                    self._label_value(
+                        "Capability gained", narrative.get("capability_gained", "Not recorded"), styles
+                    ),
+                    self._label_value(
+                        "Next realistic attacker step",
+                        narrative.get("next_realistic_step", "Not recorded"),
+                        styles,
+                    ),
+                    self._label_value(
+                        "Chain opportunities",
+                        ", ".join(narrative.get("chain_opportunities", [])) or "None recorded",
+                        styles,
+                    ),
+                    self._label_value(
+                        "Confirmed", "; ".join(narrative.get("confirmed", [])) or "None", styles
+                    ),
+                    self._label_value(
+                        "Inferred", "; ".join(narrative.get("inferred", [])) or "None", styles
+                    ),
+                    self._label_value(
+                        "Technical impact", narrative.get("technical_impact", "Not recorded"), styles
+                    ),
+                    self._label_value(
+                        "Business impact", narrative.get("business_impact", "Not recorded"), styles
+                    ),
+                ]
+            )
             evidence = [record for record in data.evidence if record.finding_id == finding.id]
             if evidence:
                 details.append(Paragraph("<b>Evidence:</b>", styles["body"]))
@@ -201,8 +345,8 @@ class PDFReportGenerator:
         return story
 
     def _technology(self, data: ReportData, styles: dict[str, ParagraphStyle]) -> list[object]:
-        story: list[object] = [PageBreak(), Paragraph("Technology and Component Inventory", styles["h1"])]
-        rows: list[list[object]] = [["Product", "Version", "Category", "Confidence", "EOL / references"]]
+        story: list[object] = [PageBreak(), Paragraph("Technology Inventory", styles["h1"])]
+        rows: list[list[object]] = [["Product", "Version", "Category", "Confidence", "Lifecycle / references"]]
         for technology in data.technologies:
             refs = ", ".join(technology.vulnerability_references)
             rows.append(
@@ -219,16 +363,48 @@ class PDFReportGenerator:
         table = Table(rows, colWidths=[40 * mm, 25 * mm, 35 * mm, 25 * mm, 47 * mm], repeatRows=1)
         table.setStyle(self._table_style())
         story.append(table)
+        story.append(Paragraph("EOL / Outdated Components", styles["h1"]))
+        lifecycle = [item for item in data.technologies if item.eol_state or item.vulnerability_references]
+        if lifecycle:
+            for item in lifecycle:
+                story.append(
+                    Paragraph(
+                        self._escape(
+                            f"{item.product} {item.version or 'unknown'} — {item.eol_state or 'potentially vulnerable'}; "
+                            f"{'; '.join(item.lifecycle_evidence) or ', '.join(item.vulnerability_references)}"
+                        ),
+                        styles["body"],
+                    )
+                )
+        else:
+            story.append(
+                Paragraph(
+                    "No observed exact version matched the configured lifecycle or vulnerability knowledge. Unknown versions were not guessed.",
+                    styles["body"],
+                )
+            )
         return story
 
     def _plugins(self, data: ReportData, styles: dict[str, ParagraphStyle]) -> list[object]:
-        story: list[object] = [PageBreak(), Paragraph("Plugin Execution Summary", styles["h1"])]
-        rows: list[list[object]] = [["Plugin", "State", "Failure reason", "Duration (ms)"]]
+        story: list[object] = [PageBreak(), Paragraph("Plugin Execution / Coverage Limitations", styles["h1"])]
+        rows: list[list[object]] = [["Plugin / phase", "State", "Tests", "Findings / limitation"]]
         for plugin in data.plugin_executions:
-            rows.append([plugin.plugin_name, plugin.state, plugin.failure_reason or "-", plugin.duration_ms or 0])
+            rows.append(
+                [
+                    f"{plugin.plugin_name} / {plugin.phase}",
+                    plugin.state,
+                    f"{plugin.tests_completed}/{plugin.tests_attempted}",
+                    Paragraph(
+                        self._escape(
+                            f"{plugin.findings_count}; {plugin.failure_reason or plugin.skip_reason or plugin.message or '-'}"
+                        ),
+                        styles["small"],
+                    ),
+                ]
+            )
         if len(rows) == 1:
             rows.append(["No plugin executions recorded", "-", "-", 0])
-        table = Table(rows, colWidths=[55 * mm, 35 * mm, 55 * mm, 27 * mm], repeatRows=1)
+        table = Table(rows, colWidths=[50 * mm, 27 * mm, 25 * mm, 70 * mm], repeatRows=1)
         table.setStyle(self._table_style())
         story.append(table)
         return story

@@ -12,13 +12,15 @@ from sqlalchemy import select
 
 from .attack_paths import AttackPathEngine, PathFinding
 from .config import AppConfig
+from .coverage import assessment_coverage
 from .domain import TargetInput, redact_text
-from .enums import AssessmentStatus, PluginState
+from .enums import AssessmentStatus, PentestPhase, PluginState
 from .inventory import SharedInventory
 from .persistence.database import Database
 from .persistence.models import (
     Application,
     Assessment,
+    AssessmentCoverage,
     Asset,
     AttackPath,
     AttackPathCapability,
@@ -31,7 +33,10 @@ from .persistence.models import (
     Finding,
     LLMTriage,
     Parameter,
+    PentestPhaseProgress,
     PluginExecution,
+    PostExploitationStep,
+    Priority,
     RawObservationDB,
     ScanMetric,
     Technology,
@@ -86,6 +91,7 @@ class ScanEngine:
                 assessment_id,
                 context,
                 timed_results,
+                plugins=plugins,
                 llm_records=llm_records,
             )
         except Exception as exc:
@@ -163,6 +169,7 @@ class ScanEngine:
         assessment_id: str,
         context: PluginContext,
         timed_results: list[Any],
+        plugins: list[Any],
         llm_records: list[dict[str, Any]] | None = None,
     ) -> None:
         with self.database.session() as session:
@@ -182,15 +189,30 @@ class ScanEngine:
                 execution = PluginExecution(
                     assessment_id=assessment_id,
                     plugin_name=result.plugin,
+                    phase=plugin_definition.phase.value,
+                    security_question=result.security_question,
                     state=result.state.value,
                     failure_reason=result.failure_reason.value if result.failure_reason else None,
                     message=redact_text(result.message) if result.message else None,
-                    started_at=datetime.now(UTC),
-                    completed_at=datetime.now(UTC),
+                    started_at=timed.started_at,
+                    completed_at=timed.completed_at,
                     duration_ms=timed.duration_ms,
                     tool_path=tool_path,
                     tool_version=tool_version,
-                    metrics=result.metrics,
+                    tests_attempted=result.tests_attempted,
+                    tests_completed=result.tests_completed,
+                    targets_tested=len(result.targets_tested),
+                    findings_count=len(result.findings),
+                    skip_reason=(
+                        result.message
+                        if result.state in {PluginState.NOT_APPLICABLE, PluginState.BLOCKED}
+                        else None
+                    ),
+                    metrics={
+                        **result.metrics,
+                        "next_tests": result.next_tests,
+                        "attacker_capabilities": result.attacker_capabilities,
+                    },
                 )
                 session.add(execution)
                 session.flush()
@@ -260,6 +282,18 @@ class ScanEngine:
             )
             paths = self._persist_attack_paths(
                 session, application_id, assessment_id, findings
+            )
+            self._persist_coverage(
+                session,
+                assessment_id,
+                assessment_coverage(plugins, timed_results, findings),
+            )
+            self._persist_phases(
+                session,
+                assessment_id,
+                timed_results,
+                findings_count=len(findings),
+                attack_paths_count=len(paths),
             )
             for name, value in {
                 "assets_discovered": len(context.inventory.assets),
@@ -376,6 +410,7 @@ class ScanEngine:
                     )
                 )
         for item in inventory.technologies.values():
+            item = self.knowledge.enrich_technology(item)
             session.add(
                 Technology(
                     assessment_id=assessment_id,
@@ -387,7 +422,12 @@ class ScanEngine:
                     evidence=item.evidence,
                     source_plugin=item.source_plugin,
                     eol_state=item.eol_state,
+                    eol_date=item.eol_date,
+                    supported=item.supported,
+                    lifecycle_source=item.lifecycle_source,
+                    lifecycle_evidence=item.lifecycle_evidence,
                     vulnerability_references=item.vulnerability_references,
+                    vulnerability_data=item.vulnerability_data,
                 )
             )
         return endpoint_ids
@@ -434,12 +474,14 @@ class ScanEngine:
                 title=finding.title,
                 asset=finding.asset,
                 endpoints=finding.affected_endpoints,
+                parameters=finding.parameters,
                 severity=finding.severity,
                 confidence=finding.confidence,
                 validation_status=finding.validation_status,
                 remediation=finding.remediation,
                 metadata=finding.metadata_json,
                 fingerprint=finding.fingerprint,
+                source_plugins=finding.source_plugins,
             )
             for finding in findings
         ]
@@ -551,10 +593,28 @@ class ScanEngine:
                 if finding:
                     finding.attack_path_participation = True
                     finding.priority_score = min(100.0, finding.priority_score + 8.0)
+                    finding.priority_rationale = {
+                        **finding.priority_rationale,
+                        "attack_path_participation": 8.0,
+                        "attack_path_score": item.score,
+                    }
                     if finding.priority_score >= 85:
                         finding.priority_level = "critical"
                     elif finding.priority_score >= 65:
                         finding.priority_level = "high"
+                    elif finding.priority_score >= 40:
+                        finding.priority_level = "medium"
+                    elif finding.priority_score >= 15:
+                        finding.priority_level = "low"
+                    else:
+                        finding.priority_level = "informational"
+                    priority = session.scalar(
+                        select(Priority).where(Priority.finding_id == finding.id)
+                    )
+                    if priority:
+                        priority.score = finding.priority_score
+                        priority.level = finding.priority_level
+                        priority.rationale = finding.priority_rationale
             for capability in item.capabilities:
                 session.add(
                     AttackPathCapability(
@@ -582,8 +642,171 @@ class ScanEngine:
                     confidence="low",
                 )
             )
+            primary_finding_id = item.finding_ids[0] if item.finding_ids else None
+            for sequence, (action, capability, classification, confidence, rationale) in enumerate(
+                (
+                    (
+                        item.next_step,
+                        item.capabilities[0] if item.capabilities else "follow_on_access",
+                        "inferred",
+                        item.confidence,
+                        "This is the next realistic attacker action derived from the bounded capability; it was not executed.",
+                    ),
+                    (
+                        item.technical_impact,
+                        "technical_impact_realization",
+                        "speculative",
+                        "low",
+                        "Impact depends on data, privileges, controls, and business context not fully observable externally.",
+                    ),
+                ),
+                1,
+            ):
+                session.add(
+                    PostExploitationStep(
+                        assessment_id=assessment_id,
+                        attack_path_id=path.id,
+                        source_finding_id=primary_finding_id,
+                        sequence=sequence,
+                        action=action,
+                        capability=capability,
+                        classification=classification,
+                        confidence=confidence,
+                        rationale=rationale,
+                        technical_impact=item.technical_impact if sequence == 2 else None,
+                        business_impact=item.business_impact if sequence == 2 else None,
+                    )
+                )
             persisted.append(path)
         return persisted
+
+    @staticmethod
+    def _persist_coverage(
+        session: Any, assessment_id: str, rows: list[dict[str, object]]
+    ) -> None:
+        for row in rows:
+            session.add(
+                AssessmentCoverage(
+                    assessment_id=assessment_id,
+                    category=str(row["category"]),
+                    name=str(row["name"]),
+                    status=str(row["status"]),
+                    automated_checks=list(row["automated_checks"]),
+                    plugins=list(row["plugins"]),
+                    tests_attempted=int(row["tests_attempted"]),
+                    tests_completed=int(row["tests_completed"]),
+                    findings_count=int(row["findings"]),
+                    limitations=list(row["limitations"]),
+                    manual_review_needs=list(row["manual_review_needs"]),
+                )
+            )
+
+    def _persist_phases(
+        self,
+        session: Any,
+        assessment_id: str,
+        timed_results: list[Any],
+        *,
+        findings_count: int,
+        attack_paths_count: int,
+    ) -> None:
+        by_phase: dict[PentestPhase, list[Any]] = {phase: [] for phase in PentestPhase}
+        for item in timed_results:
+            by_phase[self.registry.get(item.result.plugin).phase].append(item)
+        core_phases = (
+            PentestPhase.RECONNAISSANCE,
+            PentestPhase.SCANNING,
+            PentestPhase.ENUMERATION,
+            PentestPhase.EXPLOITATION_VALIDATION,
+        )
+        for phase in core_phases:
+            items = by_phase[phase]
+            states = [item.result.state for item in items]
+            if not items:
+                status = "not_applicable"
+            elif all(state is PluginState.NOT_APPLICABLE for state in states):
+                status = "not_applicable"
+            elif all(state in {PluginState.COMPLETED, PluginState.NOT_APPLICABLE} for state in states):
+                status = "completed"
+            elif any(state in {PluginState.COMPLETED, PluginState.PARTIAL} for state in states):
+                status = "partial"
+            else:
+                status = "blocked"
+            limitations = sorted(
+                {
+                    f"{item.result.plugin}: {item.result.message or item.result.failure_reason.value}"
+                    for item in items
+                    if item.result.failure_reason
+                }
+            )
+            limitations.extend(
+                sorted(
+                    {
+                        f"{item.result.plugin}: {item.result.message}"
+                        for item in items
+                        if item.result.state is PluginState.NOT_APPLICABLE
+                        and item.result.message
+                    }
+                )
+            )
+            session.add(
+                PentestPhaseProgress(
+                    assessment_id=assessment_id,
+                    phase=phase.value,
+                    sequence=phase.order,
+                    status=status,
+                    started_at=min((item.started_at for item in items), default=None),
+                    completed_at=max((item.completed_at for item in items), default=None),
+                    plugins=[item.result.plugin for item in items],
+                    tests_attempted=sum(item.result.tests_attempted for item in items),
+                    tests_completed=sum(item.result.tests_completed for item in items),
+                    findings_count=sum(len(item.result.findings) for item in items),
+                    limitations=limitations,
+                    summary=f"{len(items)} plugin(s) contributed to {phase.value.replace('_', ' ')}.",
+                )
+            )
+        now = datetime.now(UTC)
+        for phase, count, summary in (
+            (
+                PentestPhase.ANALYSIS,
+                findings_count,
+                f"Normalized and aggregated {findings_count} canonical finding(s).",
+            ),
+            (
+                PentestPhase.ATTACK_PATH,
+                attack_paths_count,
+                f"Generated {attack_paths_count} evidence-bounded attack path(s).",
+            ),
+            (
+                PentestPhase.POST_EXPLOITATION_REASONING,
+                attack_paths_count,
+                "Generated bounded next-action and impact reasoning without executing post-exploitation.",
+            ),
+        ):
+            session.add(
+                PentestPhaseProgress(
+                    assessment_id=assessment_id,
+                    phase=phase.value,
+                    sequence=phase.order,
+                    status="completed",
+                    started_at=now,
+                    completed_at=now,
+                    plugins=[],
+                    tests_attempted=count,
+                    tests_completed=count,
+                    findings_count=findings_count if phase is PentestPhase.ANALYSIS else 0,
+                    limitations=(
+                        ["No attack path was generated because no deterministic chain rule matched."]
+                        if phase in {
+                            PentestPhase.ATTACK_PATH,
+                            PentestPhase.POST_EXPLOITATION_REASONING,
+                        }
+                        and attack_paths_count == 0
+                        else []
+                    ),
+                    summary=summary,
+                )
+            )
 
     def _safe_config_snapshot(self) -> dict[str, Any]:
         payload = self.config.model_dump(mode="json")

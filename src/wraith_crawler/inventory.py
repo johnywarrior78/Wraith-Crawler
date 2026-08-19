@@ -62,6 +62,21 @@ class SharedInventory:
         existing.vulnerability_references = sorted(
             set(existing.vulnerability_references + technology.vulnerability_references)
         )
+        known_vulnerabilities = {
+            str(item.get("id") or item) for item in existing.vulnerability_data
+        }
+        existing.vulnerability_data.extend(
+            item
+            for item in technology.vulnerability_data
+            if str(item.get("id") or item) not in known_vulnerabilities
+        )
+        existing.lifecycle_evidence = sorted(
+            set(existing.lifecycle_evidence + technology.lifecycle_evidence)
+        )
+        for attr in ("eol_state", "eol_date", "supported", "lifecycle_source"):
+            value = getattr(technology, attr)
+            if value is not None:
+                setattr(existing, attr, value)
 
     @staticmethod
     def _merge_parameters(

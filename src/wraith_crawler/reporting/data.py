@@ -11,6 +11,8 @@ from ..coverage import coverage_matrix
 from ..persistence.models import (
     Application,
     Assessment,
+    AssessmentCoverage,
+    Asset,
     AttackPath,
     AttackPathEdge,
     AttackPathFinding,
@@ -19,7 +21,10 @@ from ..persistence.models import (
     Evidence,
     Finding,
     ManualReviewItem,
+    Parameter,
+    PentestPhaseProgress,
     PluginExecution,
+    PostExploitationStep,
     ScanMetric,
     Technology,
 )
@@ -36,7 +41,9 @@ class ReportData:
     completed_at: datetime | None
     findings: list[Finding] = field(default_factory=list)
     evidence: list[Evidence] = field(default_factory=list)
+    assets: list[Asset] = field(default_factory=list)
     endpoints: list[Endpoint] = field(default_factory=list)
+    parameters: list[Parameter] = field(default_factory=list)
     technologies: list[Technology] = field(default_factory=list)
     plugin_executions: list[PluginExecution] = field(default_factory=list)
     manual_reviews: list[ManualReviewItem] = field(default_factory=list)
@@ -44,6 +51,8 @@ class ReportData:
     attack_nodes: list[AttackPathNode] = field(default_factory=list)
     attack_edges: list[AttackPathEdge] = field(default_factory=list)
     attack_path_findings: list[AttackPathFinding] = field(default_factory=list)
+    post_exploitation_steps: list[PostExploitationStep] = field(default_factory=list)
+    pentest_phases: list[PentestPhaseProgress] = field(default_factory=list)
     metrics: list[ScanMetric] = field(default_factory=list)
     owasp_coverage: list[dict[str, Any]] = field(default_factory=coverage_matrix)
 
@@ -63,6 +72,13 @@ def load_report_data(session: Session, assessment_id: str) -> ReportData:
         )
     )
     path_ids = [path.id for path in paths]
+    persisted_coverage = list(
+        session.scalars(
+            select(AssessmentCoverage)
+            .where(AssessmentCoverage.assessment_id == assessment_id)
+            .order_by(AssessmentCoverage.category)
+        )
+    )
     return ReportData(
         assessment_id=assessment_id,
         application_name=application.name,
@@ -85,11 +101,25 @@ def load_report_data(session: Session, assessment_id: str) -> ReportData:
                 .order_by(Evidence.observed_at)
             )
         ),
+        assets=list(
+            session.scalars(
+                select(Asset)
+                .where(Asset.assessment_id == assessment_id)
+                .order_by(Asset.hostname, Asset.url)
+            )
+        ),
         endpoints=list(
             session.scalars(
                 select(Endpoint)
                 .where(Endpoint.assessment_id == assessment_id)
                 .order_by(Endpoint.origin, Endpoint.path)
+            )
+        ),
+        parameters=list(
+            session.scalars(
+                select(Parameter)
+                .where(Parameter.assessment_id == assessment_id)
+                .order_by(Parameter.endpoint_id, Parameter.location, Parameter.name)
             )
         ),
         technologies=list(
@@ -131,11 +161,49 @@ def load_report_data(session: Session, assessment_id: str) -> ReportData:
         )
         if path_ids
         else [],
+        post_exploitation_steps=list(
+            session.scalars(
+                select(PostExploitationStep)
+                .where(PostExploitationStep.assessment_id == assessment_id)
+                .order_by(PostExploitationStep.attack_path_id, PostExploitationStep.sequence)
+            )
+        ),
+        pentest_phases=list(
+            session.scalars(
+                select(PentestPhaseProgress)
+                .where(PentestPhaseProgress.assessment_id == assessment_id)
+                .order_by(PentestPhaseProgress.sequence)
+            )
+        ),
         metrics=list(
             session.scalars(
                 select(ScanMetric)
                 .where(ScanMetric.assessment_id == assessment_id)
                 .order_by(ScanMetric.metric_name)
             )
+        ),
+        owasp_coverage=(
+            [
+                {
+                    "category": row.category,
+                    "name": row.name,
+                    "status": row.status,
+                    "automated_checks": row.automated_checks,
+                    "capabilities": row.automated_checks,
+                    "plugins": row.plugins,
+                    "tests_attempted": row.tests_attempted,
+                    "tests_completed": row.tests_completed,
+                    "findings": row.findings_count,
+                    "limitations": row.limitations,
+                    "limitation": "; ".join(row.limitations),
+                    "manual_review_needs": row.manual_review_needs,
+                    "cwe": [],
+                    "automation_level": "assessment_specific",
+                    "validation_strength": row.status,
+                }
+                for row in persisted_coverage
+            ]
+            if persisted_coverage
+            else coverage_matrix()
         ),
     )

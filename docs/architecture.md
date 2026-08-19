@@ -4,19 +4,22 @@ Wraith Crawler is a modular monolith with explicit domain boundaries. Scanner ou
 
 ```text
 URL intake and scope
-  -> capability-driven plugin runtime
+  -> phase and capability-driven plugin runtime
+     -> reconnaissance -> scanning -> enumeration -> safe validation -> analysis
   -> shared assets/endpoints/parameters/technologies
   -> raw observations and evidence
   -> canonical candidates and aggregation
   -> deterministic priority and history
-  -> evidence-bounded attack paths
+  -> evidence-bounded attack paths -> post-exploitation reasoning
   -> PostgreSQL
      -> REST API
      -> PDF and Excel reports
      -> reporting views -> read-only Metabase
 ```
 
-The seed URL is always a capability. Crawlers enrich the endpoint inventory but never gate independent HTTP, TLS, header, Nuclei, or Nikto work. The runtime schedules any plugin whose required data capability exists, isolates exceptions and timeouts, and retains trustworthy partial output.
+The seed URL is always a capability. Crawlers enrich the endpoint inventory but never gate independent HTTP, TLS, header, Nuclei, or Nikto work. The runtime enforces phase and stage barriers, then schedules plugins whose required data capability exists concurrently within each barrier. It isolates exceptions and timeouts and retains trustworthy partial output.
+
+Every phase records status, test counts, finding counts, limitations, and the next safe test. Every finding requires structured evidence. Capability, impact, and post-exploitation statements are persisted as confirmed, inferred, or speculative rather than being presented as actions the scanner performed.
 
 ## Boundaries
 

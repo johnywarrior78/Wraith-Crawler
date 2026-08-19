@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import Any
+
+from .enums import PluginState
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,3 +113,71 @@ OWASP_COVERAGE: tuple[CoverageEntry, ...] = (
 
 def coverage_matrix() -> list[dict[str, object]]:
     return [asdict(entry) for entry in OWASP_COVERAGE]
+
+
+def assessment_coverage(
+    plugins: list[Any], timed_results: list[Any], findings: list[Any]
+) -> list[dict[str, object]]:
+    """Build honest, scan-specific OWASP coverage from actual execution state."""
+    plugin_by_name = {plugin.name: plugin for plugin in plugins}
+    result_by_name = {item.result.plugin: item.result for item in timed_results}
+    rows: list[dict[str, object]] = []
+    successful = {PluginState.COMPLETED, PluginState.PARTIAL}
+    for entry in OWASP_COVERAGE:
+        category_plugins = sorted(
+            name for name, plugin in plugin_by_name.items() if entry.category in plugin.owasp
+        )
+        results = [result_by_name[name] for name in category_plugins if name in result_by_name]
+        attempted = sum(
+            max(1, result.tests_attempted)
+            for result in results
+            if result.state not in {PluginState.BLOCKED, PluginState.NOT_APPLICABLE}
+        )
+        completed = sum(
+            max(1, result.tests_completed)
+            for result in results
+            if result.state in successful
+        )
+        category_findings = [finding for finding in findings if entry.category in finding.owasp]
+        limitations = [entry.limitation]
+        limitations.extend(
+            f"{result.plugin}: {result.message or result.failure_reason.value}"
+            for result in results
+            if result.state in {PluginState.BLOCKED, PluginState.FAILED, PluginState.TIMED_OUT}
+            and result.failure_reason
+        )
+        limitations.extend(
+            f"{result.plugin}: {result.message}"
+            for result in results
+            if result.state is PluginState.NOT_APPLICABLE and result.message
+        )
+        if not results:
+            status = "not_attempted"
+        elif all(result.state is PluginState.NOT_APPLICABLE for result in results):
+            status = "not_attempted"
+        elif all(result.state in {PluginState.COMPLETED, PluginState.NOT_APPLICABLE} for result in results):
+            status = "completed"
+        elif any(result.state in successful for result in results):
+            status = "partial"
+        else:
+            status = "blocked"
+        rows.append(
+            {
+                **asdict(entry),
+                "automated_checks": list(entry.capabilities),
+                "plugins": category_plugins,
+                "status": status,
+                "tests_attempted": attempted,
+                "tests_completed": completed,
+                "findings": len(category_findings),
+                "limitations": sorted(set(limitations)),
+                "manual_review_needs": sorted(
+                    {
+                        finding.title
+                        for finding in category_findings
+                        if finding.manual_review
+                    }
+                ),
+            }
+        )
+    return rows

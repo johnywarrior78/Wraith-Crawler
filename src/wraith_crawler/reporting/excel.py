@@ -32,15 +32,18 @@ SEVERITY_FILLS = {
 class ExcelReportGenerator:
     SHEETS = (
         "Executive Summary",
-        "Findings",
-        "Affected Endpoints",
-        "OWASP Coverage",
+        "Reconnaissance",
         "Technologies",
         "Vulnerable Components",
-        "Plugin Execution",
-        "Manual Review",
+        "Endpoints",
+        "Parameters",
+        "Findings",
+        "OWASP Coverage",
         "Attack Paths",
         "Attack Steps",
+        "Post-Exploitation Steps",
+        "Manual Review",
+        "Plugin Health",
         "Attack Path Findings",
         "Assessment Metrics",
     )
@@ -52,15 +55,18 @@ class ExcelReportGenerator:
         for name in self.SHEETS:
             workbook.create_sheet(name)
         self._executive(workbook["Executive Summary"], data)
-        self._findings(workbook["Findings"], data)
-        self._endpoints(workbook["Affected Endpoints"], data)
-        self._coverage(workbook["OWASP Coverage"], data)
+        self._reconnaissance(workbook["Reconnaissance"], data)
         self._technologies(workbook["Technologies"], data, vulnerable_only=False)
         self._technologies(workbook["Vulnerable Components"], data, vulnerable_only=True)
-        self._plugins(workbook["Plugin Execution"], data)
-        self._manual(workbook["Manual Review"], data)
+        self._endpoints(workbook["Endpoints"], data)
+        self._parameters(workbook["Parameters"], data)
+        self._findings(workbook["Findings"], data)
+        self._coverage(workbook["OWASP Coverage"], data)
         self._paths(workbook["Attack Paths"], data)
         self._steps(workbook["Attack Steps"], data)
+        self._post_exploitation(workbook["Post-Exploitation Steps"], data)
+        self._manual(workbook["Manual Review"], data)
+        self._plugins(workbook["Plugin Health"], data)
         self._path_findings(workbook["Attack Path Findings"], data)
         self._metrics(workbook["Assessment Metrics"], data)
         for sheet in workbook.worksheets:
@@ -123,9 +129,13 @@ class ExcelReportGenerator:
             "Confidence", "Validation", "Status", "Manual Review", "CWE", "CVE", "OWASP", "CVSS", "EPSS",
             "KEV", "Parameters", "Affected Endpoint Count", "Remediation", "First Seen", "Last Seen",
             "Evidence Summary",
+            "How an Attacker Exploits", "Capability Gained", "Next Realistic Step",
+            "Chain Opportunities", "Confirmed", "Inferred", "Technical Impact",
+            "Business Impact", "Attack-Path Break Point",
         ]
         rows = []
         for f in data.findings:
+            narrative = f.attacker_narrative or {}
             rows.append([
                 f.id, f.finding_type, f.family, f.title, f.asset, f.severity, f.priority_level, f.priority_score,
                 f.confidence, f.validation_status, f.status, f.manual_review, ", ".join(f.cwe), ", ".join(f.cve),
@@ -136,6 +146,15 @@ class ExcelReportGenerator:
                     for record in data.evidence
                     if record.finding_id == f.id
                 ),
+                narrative.get("exploitation", ""),
+                narrative.get("capability_gained", ""),
+                narrative.get("next_realistic_step", ""),
+                " | ".join(narrative.get("chain_opportunities", [])),
+                " | ".join(narrative.get("confirmed", [])),
+                " | ".join(narrative.get("inferred", [])),
+                narrative.get("technical_impact", ""),
+                narrative.get("business_impact", ""),
+                narrative.get("remediation_break_point", ""),
             ])
         self._write_table(sheet, headers, rows, "FindingsTable")
         for cell in sheet["H"][1:]:
@@ -153,36 +172,95 @@ class ExcelReportGenerator:
                     FormulaRule(formula=[f'$G2="{level}"'], fill=PatternFill("solid", fgColor=color), font=Font(color=WHITE)),
                 )
 
+    def _reconnaissance(self, sheet: Any, data: ReportData) -> None:
+        headers = [
+            "Asset ID", "URL", "Origin", "Scheme", "Hostname", "Port", "Resolved IPs",
+            "CNAME", "HTTP Status", "Redirect Chain", "Title", "Server", "CDN/WAF",
+            "TLS Details", "Discovery Sources",
+        ]
+        rows = [
+            [
+                asset.id, asset.url, asset.origin, asset.scheme, asset.hostname, asset.port,
+                ", ".join(asset.resolved_ips), asset.cname or "", asset.http_status,
+                " -> ".join(asset.redirect_chain), asset.title or "", asset.server or "",
+                asset.cdn_waf or "", self._flat_mapping(asset.tls_details),
+                ", ".join(asset.discovery_sources),
+            ]
+            for asset in data.assets
+        ]
+        self._write_table(sheet, headers, rows, "ReconnaissanceTable")
+
     def _endpoints(self, sheet: Any, data: ReportData) -> None:
-        headers = ["Finding ID", "Finding Type", "Priority", "Endpoint", "Method", "Parameters", "Validation"]
-        rows = []
-        for finding in data.findings:
-            for endpoint in finding.affected_endpoints or [finding.asset]:
-                rows.append([finding.id, finding.finding_type, finding.priority_level, endpoint, finding.method or "GET", ", ".join(finding.parameters), finding.validation_status])
-        self._write_table(sheet, headers, rows, "AffectedEndpointsTable")
+        parameter_counts = Counter(parameter.endpoint_id for parameter in data.parameters)
+        headers = [
+            "Endpoint ID", "URL", "Origin", "Path", "Method", "Status", "Content Type",
+            "Discovery Sources", "Parameter Count", "Authentication Required",
+            "API Classification", "JavaScript Reference", "Confidence",
+        ]
+        rows = [
+            [
+                endpoint.id, endpoint.url, endpoint.origin, endpoint.path, endpoint.method,
+                endpoint.status_code, endpoint.content_type or "", ", ".join(endpoint.source_plugins),
+                parameter_counts[endpoint.id], endpoint.authentication_required,
+                endpoint.api_classification or "", endpoint.javascript_source or "", endpoint.confidence,
+            ]
+            for endpoint in data.endpoints
+        ]
+        self._write_table(sheet, headers, rows, "EndpointsTable")
+
+    def _parameters(self, sheet: Any, data: ReportData) -> None:
+        endpoints = {endpoint.id: endpoint for endpoint in data.endpoints}
+        headers = [
+            "Parameter ID", "Endpoint", "Method", "Name", "Normalized Name", "Location",
+            "Required", "Source", "Risk Categories", "Risk Score", "Sample Metadata",
+        ]
+        rows = [
+            [
+                parameter.id,
+                endpoints[parameter.endpoint_id].url if parameter.endpoint_id in endpoints else "",
+                parameter.method,
+                parameter.name,
+                parameter.normalized_name,
+                parameter.location,
+                parameter.required,
+                parameter.source,
+                ", ".join(parameter.risk_categories),
+                parameter.risk_score,
+                self._flat_mapping(parameter.sample_metadata),
+            ]
+            for parameter in data.parameters
+        ]
+        self._write_table(sheet, headers, rows, "ParametersTable")
 
     def _coverage(self, sheet: Any, data: ReportData) -> None:
-        headers = ["Category", "Name", "Capabilities", "CWE", "Automation", "Validation Strength", "External Limitation", "Finding Count"]
+        headers = [
+            "Category", "Name", "Status", "Automated Checks", "Plugins", "Tests Attempted",
+            "Tests Completed", "Finding Count", "Limitations", "Manual Review Needs",
+        ]
         rows = []
         for entry in data.owasp_coverage:
             rows.append([
-                entry["category"], entry["name"], ", ".join(entry["capabilities"]), ", ".join(entry["cwe"]),
-                entry["automation_level"], entry["validation_strength"], entry["limitation"],
-                sum(1 for finding in data.findings if entry["category"] in finding.owasp),
+                entry["category"], entry["name"], entry.get("status", "reference"),
+                ", ".join(entry.get("automated_checks", entry.get("capabilities", []))),
+                ", ".join(entry.get("plugins", [])), entry.get("tests_attempted", 0),
+                entry.get("tests_completed", 0),
+                entry.get("findings", sum(1 for finding in data.findings if entry["category"] in finding.owasp)),
+                "; ".join(entry.get("limitations", [entry.get("limitation", "")])),
+                " | ".join(entry.get("manual_review_needs", [])),
             ])
         self._write_table(sheet, headers, rows, "OWASPCoverageTable")
 
     def _technologies(self, sheet: Any, data: ReportData, vulnerable_only: bool) -> None:
-        headers = ["Technology ID", "Product", "Version", "Category", "Confidence", "EOL State", "Vulnerability References", "Source"]
+        headers = ["Technology ID", "Product", "Version", "Category", "Confidence", "Lifecycle State", "Supported", "EOL Date", "Lifecycle Source", "Lifecycle Evidence", "Vulnerability References", "Vulnerability Data", "Detection Source"]
         technologies = [t for t in data.technologies if not vulnerable_only or t.eol_state or t.vulnerability_references]
-        rows = [[t.id, t.product, t.version or "", t.category, t.confidence, t.eol_state or "", ", ".join(t.vulnerability_references), t.source_plugin] for t in technologies]
+        rows = [[t.id, t.product, t.version or "", t.category, t.confidence, t.eol_state or "unknown", t.supported, t.eol_date or "", t.lifecycle_source or "", " | ".join(t.lifecycle_evidence), ", ".join(t.vulnerability_references), " | ".join(self._flat_mapping(item) for item in t.vulnerability_data), t.source_plugin] for t in technologies]
         self._write_table(sheet, headers, rows, "VulnerableComponentsTable" if vulnerable_only else "TechnologiesTable")
 
     def _plugins(self, sheet: Any, data: ReportData) -> None:
-        headers = ["Plugin", "State", "Failure Reason", "Message", "Started", "Completed", "Duration (ms)", "Tool Path", "Tool Version"]
-        rows = [[p.plugin_name, p.state, p.failure_reason or "", p.message or "", p.started_at, p.completed_at, p.duration_ms, p.tool_path or "", p.tool_version or ""] for p in data.plugin_executions]
+        headers = ["Plugin", "Phase", "Security Question", "State", "Failure Reason", "Skip Reason", "Message", "Started", "Completed", "Duration (ms)", "Targets Tested", "Tests Attempted", "Tests Completed", "Findings", "Tool Path", "Tool Version"]
+        rows = [[p.plugin_name, p.phase, p.security_question or "", p.state, p.failure_reason or "", p.skip_reason or "", p.message or "", p.started_at, p.completed_at, p.duration_ms, p.targets_tested, p.tests_attempted, p.tests_completed, p.findings_count, p.tool_path or "", p.tool_version or ""] for p in data.plugin_executions]
         self._write_table(sheet, headers, rows, "PluginExecutionTable")
-        for col in ("E", "F"):
+        for col in ("H", "I"):
             for cell in sheet[col][1:]:
                 cell.number_format = "yyyy-mm-dd hh:mm"
 
@@ -206,6 +284,22 @@ class ExcelReportGenerator:
             rows.append([edge.attack_path_id, edge.id, source.node_type if source else "", source.label if source else "", edge.relationship, destination.node_type if destination else "", destination.label if destination else "", edge.confidence, edge.classification, edge.rationale, edge.evidence_reference or ""])
         self._write_table(sheet, headers, rows, "AttackStepsTable")
 
+    def _post_exploitation(self, sheet: Any, data: ReportData) -> None:
+        headers = [
+            "Step ID", "Attack Path ID", "Source Finding ID", "Sequence", "Action",
+            "Capability", "Classification", "Confidence", "Rationale", "Technical Impact",
+            "Business Impact",
+        ]
+        rows = [
+            [
+                step.id, step.attack_path_id, step.source_finding_id or "", step.sequence,
+                step.action, step.capability, step.classification, step.confidence,
+                step.rationale, step.technical_impact or "", step.business_impact or "",
+            ]
+            for step in data.post_exploitation_steps
+        ]
+        self._write_table(sheet, headers, rows, "PostExploitationStepsTable")
+
     def _path_findings(self, sheet: Any, data: ReportData) -> None:
         findings = {finding.id: finding for finding in data.findings}
         headers = ["Attack Path ID", "Finding ID", "Role", "Finding Type", "Title", "Severity", "Priority", "Validation"]
@@ -221,6 +315,12 @@ class ExcelReportGenerator:
         self._write_table(sheet, headers, rows, "AssessmentMetricsTable")
         for cell in sheet["C"][1:]:
             cell.number_format = "yyyy-mm-dd hh:mm"
+
+    @staticmethod
+    def _flat_mapping(value: object) -> str:
+        if not isinstance(value, dict):
+            return str(value)
+        return "; ".join(f"{key}={item}" for key, item in value.items())
 
     def _write_table(self, sheet: Any, headers: list[str], rows: list[list[Any]], table_name: str) -> None:
         sheet.append(headers)

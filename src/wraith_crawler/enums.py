@@ -67,6 +67,21 @@ class AssessmentStatus(StrEnum):
     FAILED = "failed"
 
 
+class PentestPhase(StrEnum):
+    RECONNAISSANCE = "reconnaissance"
+    SCANNING = "scanning"
+    ENUMERATION = "enumeration"
+    EXPLOITATION_VALIDATION = "exploitation_validation"
+    ANALYSIS = "analysis"
+    ATTACK_PATH = "attack_path"
+    POST_EXPLOITATION_REASONING = "post_exploitation_reasoning"
+    REPORTING = "reporting"
+
+    @property
+    def order(self) -> int:
+        return tuple(PentestPhase).index(self)
+
+
 class RoleName(StrEnum):
     ADMIN = "admin"
     ANALYST = "analyst"

@@ -17,6 +17,9 @@ Alembic creates a dedicated `reporting` schema with stable views:
 - `vw_attack_path_findings`
 - `vw_manual_review_queue`
 - `vw_scan_history`
+- `vw_pentest_phases`
+- `vw_reconnaissance`
+- `vw_post_exploitation_steps`
 
 The installer grants `wraith_metabase_reader` CONNECT on the Wraith database, USAGE on `reporting`, and SELECT on reporting views only. It has no transactional-schema access, DML, DDL, ownership, or role-management rights.
 

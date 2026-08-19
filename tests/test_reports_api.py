@@ -19,6 +19,8 @@ def test_pdf_and_excel_reports(database, populated_assessment, tmp_path) -> None
     reader = PdfReader(str(pdf))
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
     assert "Attack Path Analysis" in text
+    assert "Pentest Methodology" in text
+    assert "Post-Exploitation Reasoning" in text
     assert "Evidence Boundary" in text
     assert "SQL injection in search" in text
     workbook = load_workbook(xlsx, data_only=False)
@@ -52,6 +54,16 @@ async def test_api_auth_rbac_and_read_endpoints(database, config, admin, populat
         assert findings.json()[0]["priority_score"] == 96.0
         paths = await client.get(f"/api/v1/assessments/{populated_assessment}/attack-paths", headers=headers)
         assert len(paths.json()) == 1
+        for suffix in (
+            "reconnaissance",
+            "pentest-phases",
+            "owasp-coverage",
+            "post-exploitation",
+        ):
+            response = await client.get(
+                f"/api/v1/assessments/{populated_assessment}/{suffix}", headers=headers
+            )
+            assert response.status_code == 200
         assert len((await client.get("/api/v1/owasp-coverage", headers=headers)).json()) == 10
 
 

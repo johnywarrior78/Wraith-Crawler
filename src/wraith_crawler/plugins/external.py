@@ -16,7 +16,15 @@ from ..domain import (
     TechnologyRecord,
     canonical_url,
 )
-from ..enums import Confidence, FailureReason, PluginState, ScanProfile, Severity, ValidationStatus
+from ..enums import (
+    Confidence,
+    FailureReason,
+    PentestPhase,
+    PluginState,
+    ScanProfile,
+    Severity,
+    ValidationStatus,
+)
 from ..tool_identity import projectdiscovery_httpx_version
 from .base import ExternalToolPlugin, PluginContext
 
@@ -46,6 +54,8 @@ class ProjectDiscoveryHTTPXPlugin(ExternalToolPlugin):
     requires = frozenset({"seed_url"})
     produces = frozenset({"httpx_metadata", "validated_origin", "endpoints"})
     profiles = frozenset({ScanProfile.QUICK, ScanProfile.STANDARD, ScanProfile.DEEP, ScanProfile.DISCOVERY_ONLY})
+    phase = PentestPhase.RECONNAISSANCE
+    security_question = "What HTTP, TLS, DNS, CDN/WAF, and technology metadata corroborates seed reconnaissance?"
 
     async def run(self, context: PluginContext) -> PluginResult:
         tool = self.resolve_tool(context)
@@ -202,6 +212,9 @@ class KatanaPlugin(ExternalToolPlugin):
     requires = frozenset({"seed_url"})
     produces = frozenset({"crawler_endpoints", "endpoints", "javascript_urls"})
     profiles = frozenset({ScanProfile.STANDARD, ScanProfile.DEEP, ScanProfile.DISCOVERY_ONLY})
+    phase = PentestPhase.ENUMERATION
+    stage = 0
+    security_question = "What additional endpoints and JavaScript assets can bounded application crawling discover?"
 
     async def run(self, context: PluginContext) -> PluginResult:
         tool = self.resolve_tool(context)
@@ -277,6 +290,8 @@ class NucleiPlugin(ExternalToolPlugin):
     produces = frozenset({"nuclei_assessment"})
     profiles = frozenset({ScanProfile.STANDARD, ScanProfile.DEEP})
     owasp = ("A03:2021", "A05:2021", "A06:2021")
+    phase = PentestPhase.EXPLOITATION_VALIDATION
+    security_question = "Which safe, non-intrusive signatures match the enumerated attack surface?"
 
     SAFE_EXCLUDE_TAGS = "dos,fuzz,bruteforce,intrusive,destructive"
 
@@ -377,6 +392,8 @@ class NucleiPlugin(ExternalToolPlugin):
                     kind="nuclei_match",
                     summary=f"Template {template_id} matched: {evidence_text}",
                     location=matched,
+                    matched_indicator=str(evidence_text),
+                    raw_output_reference=str(row.get("template-url") or template_id),
                 )
             ],
             source_plugins=[self.name],
@@ -397,6 +414,8 @@ class NiktoPlugin(ExternalToolPlugin):
     produces = frozenset({"nikto_assessment"})
     profiles = frozenset({ScanProfile.STANDARD, ScanProfile.DEEP})
     owasp = ("A05:2021",)
+    phase = PentestPhase.EXPLOITATION_VALIDATION
+    security_question = "Which externally visible web-server exposures does Nikto report and Wraith safely normalize?"
 
     STABLE_TYPES = {
         "directory indexing": "directory_listing",
@@ -458,7 +477,15 @@ class NiktoPlugin(ExternalToolPlugin):
                     severity=Severity.LOW,
                     confidence=Confidence.MEDIUM,
                     validation_status=ValidationStatus.MANUAL_REVIEW if manual else ValidationStatus.SUSPECTED,
-                    evidence=[EvidenceRecord(kind="nikto_observation", summary=message, location=url)],
+                    evidence=[
+                        EvidenceRecord(
+                            kind="nikto_observation",
+                            summary=message,
+                            location=url,
+                            matched_indicator=message[:200],
+                            raw_output_reference=str(item.get("id") or "nikto-output"),
+                        )
+                    ],
                     source_plugins=[self.name],
                     cwe=["CWE-16"],
                     owasp=["A05:2021"],
@@ -477,13 +504,16 @@ class RetireJSPlugin(ExternalToolPlugin):
     produces = frozenset({"javascript_component_assessment"})
     profiles = frozenset({ScanProfile.STANDARD, ScanProfile.DEEP})
     owasp = ("A06:2021",)
+    phase = PentestPhase.ENUMERATION
+    stage = 3
+    security_question = "Do downloaded JavaScript assets contain identifiable vulnerable component versions?"
 
     async def run(self, context: PluginContext) -> PluginResult:
+        if not context.javascript_content:
+            return PluginResult(plugin=self.name, state=PluginState.NOT_APPLICABLE, message="No downloaded JavaScript content")
         tool = self.resolve_tool(context)
         if not tool:
             return self.blocked(self.name, FailureReason.TOOL_MISSING, "Retire.js was not found")
-        if not context.javascript_content:
-            return PluginResult(plugin=self.name, state=PluginState.NOT_APPLICABLE, message="No downloaded JavaScript content")
         with tempfile.TemporaryDirectory(prefix="wraith-retire-") as directory:
             root = Path(directory)
             for index, content in enumerate(context.javascript_content.values()):
@@ -522,8 +552,27 @@ class RetireJSPlugin(ExternalToolPlugin):
                 component = str(result.get("component") or "JavaScript component")
                 version = str(result.get("version") or "unknown")
                 vulnerabilities = result.get("vulnerabilities") or []
-                references = [str(v.get("identifiers", {}).get("CVE", "")) for v in vulnerabilities if isinstance(v, dict)]
-                references = [ref for ref in references if ref]
+                references: list[str] = []
+                vulnerability_data: list[dict[str, Any]] = []
+                for vulnerability in vulnerabilities:
+                    if not isinstance(vulnerability, dict):
+                        continue
+                    identifiers = vulnerability.get("identifiers", {})
+                    cves = identifiers.get("CVE", []) if isinstance(identifiers, dict) else []
+                    if isinstance(cves, str):
+                        cves = [cves]
+                    references.extend(str(value) for value in cves if value)
+                    for cve in cves or [None]:
+                        vulnerability_data.append(
+                            {
+                                "id": str(cve) if cve else str(vulnerability.get("below") or "retirejs-advisory"),
+                                "source": "retirejs",
+                                "cvss": None,
+                                "epss": None,
+                                "kev": None,
+                            }
+                        )
+                references = sorted(set(references))
                 technologies.append(
                     TechnologyRecord(
                         product=component,
@@ -533,6 +582,7 @@ class RetireJSPlugin(ExternalToolPlugin):
                         evidence=[f"Retire.js identified {component} {version}"],
                         source_plugin=self.name,
                         vulnerability_references=references,
+                        vulnerability_data=vulnerability_data,
                     )
                 )
                 if vulnerabilities:
@@ -547,7 +597,15 @@ class RetireJSPlugin(ExternalToolPlugin):
                             severity=Severity.HIGH,
                             confidence=Confidence.HIGH,
                             validation_status=ValidationStatus.SUSPECTED,
-                            evidence=[EvidenceRecord(kind="retirejs_match", summary=f"{component} {version}", location=target)],
+                            evidence=[
+                                EvidenceRecord(
+                                    kind="retirejs_match",
+                                    summary=f"{component} {version}",
+                                    location=target,
+                                    matched_indicator=f"{component} {version}",
+                                    raw_output_reference="retirejs-json",
+                                )
+                            ],
                             source_plugins=[self.name],
                             cwe=["CWE-1104"],
                             cve=references,
@@ -566,8 +624,16 @@ class DalfoxPlugin(ExternalToolPlugin):
     produces = frozenset({"xss_validation"})
     profiles = frozenset({ScanProfile.STANDARD, ScanProfile.DEEP})
     owasp = ("A03:2021",)
+    phase = PentestPhase.EXPLOITATION_VALIDATION
+    security_question = "Can a targeted reflection candidate be safely validated as cross-site scripting?"
 
     async def run(self, context: PluginContext) -> PluginResult:
+        if not context.queues.xss:
+            return PluginResult(
+                plugin=self.name,
+                state=PluginState.NOT_APPLICABLE,
+                message="No query-string XSS candidates were discovered",
+            )
         tool = self.resolve_tool(context)
         if not tool:
             return self.blocked(self.name, FailureReason.TOOL_MISSING, "Dalfox was not found")
@@ -594,19 +660,34 @@ class DalfoxPlugin(ExternalToolPlugin):
                         severity=Severity.HIGH,
                         confidence=Confidence.CONFIRMED,
                         validation_status=ValidationStatus.CONFIRMED,
-                        evidence=[EvidenceRecord(kind="dalfox_result", summary=str(row.get("type") or "validated XSS"), location=url)],
+                        evidence=[
+                            EvidenceRecord(
+                                kind="dalfox_result",
+                                summary=str(row.get("type") or "validated XSS"),
+                                location=url,
+                                parameter=parameter,
+                                matched_indicator=str(row.get("poc") or row.get("type") or "xss"),
+                                raw_output_reference="dalfox-jsonl",
+                            )
+                        ],
                         source_plugins=[self.name],
                         cwe=["CWE-79"],
                         owasp=["A03:2021"],
                         remediation="Use context-aware output encoding, input sanitization, and a restrictive CSP.",
                     )
                 )
-        state = PluginState.PARTIAL if errors and findings else PluginState.COMPLETED
+        state = (
+            PluginState.PARTIAL
+            if errors and findings
+            else PluginState.FAILED
+            if errors
+            else PluginState.COMPLETED
+        )
         return PluginResult(
             plugin=self.name,
             state=state,
-            failure_reason=FailureReason.TOOL_EXECUTION_FAILED if errors and not findings else None,
-            capabilities_produced=set(self.produces),
+            failure_reason=FailureReason.TOOL_EXECUTION_FAILED if errors else None,
+            capabilities_produced=set(self.produces) if state is not PluginState.FAILED else set(),
             findings=findings,
             metrics={"candidates": len(context.queues.xss), "errors": errors},
             partial_output_trustworthy=bool(findings),
@@ -620,8 +701,16 @@ class SQLMapPlugin(ExternalToolPlugin):
     produces = frozenset({"sqli_validation"})
     profiles = frozenset({ScanProfile.STANDARD, ScanProfile.DEEP})
     owasp = ("A03:2021",)
+    phase = PentestPhase.EXPLOITATION_VALIDATION
+    security_question = "Can a high-relevance parameter be safely confirmed as SQL injectable without extracting data?"
 
     async def run(self, context: PluginContext) -> PluginResult:
+        if not context.queues.sqli:
+            return PluginResult(
+                plugin=self.name,
+                state=PluginState.NOT_APPLICABLE,
+                message="No query-string SQL injection candidates were discovered",
+            )
         tool = self.resolve_tool(context)
         if not tool:
             return self.blocked(self.name, FailureReason.TOOL_MISSING, "SQLMap was not found")
@@ -660,7 +749,16 @@ class SQLMapPlugin(ExternalToolPlugin):
                         severity=Severity.CRITICAL,
                         confidence=Confidence.CONFIRMED,
                         validation_status=ValidationStatus.CONFIRMED,
-                        evidence=[EvidenceRecord(kind="sqlmap_result", summary=f"SQLMap reported parameter {parameter} as vulnerable", location=url)],
+                        evidence=[
+                            EvidenceRecord(
+                                kind="sqlmap_result",
+                                summary=f"SQLMap reported parameter {parameter} as vulnerable",
+                                location=url,
+                                parameter=parameter,
+                                matched_indicator="parameter is vulnerable",
+                                raw_output_reference="sqlmap-console",
+                            )
+                        ],
                         source_plugins=[self.name],
                         cwe=["CWE-89"],
                         owasp=["A03:2021"],
@@ -668,11 +766,18 @@ class SQLMapPlugin(ExternalToolPlugin):
                         metadata={"sensitive_context": True},
                     )
                 )
+        state = (
+            PluginState.PARTIAL
+            if errors and findings
+            else PluginState.FAILED
+            if errors
+            else PluginState.COMPLETED
+        )
         return PluginResult(
             plugin=self.name,
-            state=PluginState.PARTIAL if errors and findings else PluginState.COMPLETED,
-            failure_reason=FailureReason.TOOL_EXECUTION_FAILED if errors and not findings else None,
-            capabilities_produced=set(self.produces),
+            state=state,
+            failure_reason=FailureReason.TOOL_EXECUTION_FAILED if errors else None,
+            capabilities_produced=set(self.produces) if state is not PluginState.FAILED else set(),
             findings=findings,
             metrics={"candidates": len(context.queues.sqli), "errors": errors},
             partial_output_trustworthy=bool(findings),

@@ -228,7 +228,14 @@ class Technology(Base, TimestampMixin):
     evidence: Mapped[list[str]] = mapped_column(JSON_VALUE, default=list, nullable=False)
     source_plugin: Mapped[str] = mapped_column(String(128), nullable=False)
     eol_state: Mapped[str | None] = mapped_column(String(64), index=True)
+    eol_date: Mapped[str | None] = mapped_column(String(32))
+    supported: Mapped[bool | None] = mapped_column(Boolean)
+    lifecycle_source: Mapped[str | None] = mapped_column(Text)
+    lifecycle_evidence: Mapped[list[str]] = mapped_column(JSON_VALUE, default=list, nullable=False)
     vulnerability_references: Mapped[list[str]] = mapped_column(JSON_VALUE, default=list, nullable=False)
+    vulnerability_data: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON_VALUE, default=list, nullable=False
+    )
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
@@ -241,6 +248,8 @@ class PluginExecution(Base):
         ForeignKey("assessments.id", ondelete="CASCADE"), index=True
     )
     plugin_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    phase: Mapped[str] = mapped_column(String(64), default="scanning", nullable=False, index=True)
+    security_question: Mapped[str | None] = mapped_column(Text)
     state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     failure_reason: Mapped[str | None] = mapped_column(String(64), index=True)
     message: Mapped[str | None] = mapped_column(Text)
@@ -249,6 +258,11 @@ class PluginExecution(Base):
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     tool_path: Mapped[str | None] = mapped_column(Text)
     tool_version: Mapped[str | None] = mapped_column(String(255))
+    tests_attempted: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tests_completed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    targets_tested: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    findings_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    skip_reason: Mapped[str | None] = mapped_column(Text)
     metrics: Mapped[dict[str, Any]] = mapped_column(JSON_VALUE, default=dict, nullable=False)
 
     __table_args__ = (
@@ -348,6 +362,9 @@ class Finding(Base):
     priority_level: Mapped[str] = mapped_column(String(32), default="informational", nullable=False)
     priority_rationale: Mapped[dict[str, Any]] = mapped_column(JSON_VALUE, default=dict, nullable=False)
     attack_path_participation: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    attacker_narrative: Mapped[dict[str, Any]] = mapped_column(
+        JSON_VALUE, default=dict, nullable=False
+    )
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON_VALUE, default=dict, nullable=False)
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
@@ -433,6 +450,53 @@ class ScanMetric(Base):
     metric_value: Mapped[float | None] = mapped_column(Float)
     dimensions: Mapped[dict[str, Any]] = mapped_column(JSON_VALUE, default=dict, nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
+class PentestPhaseProgress(Base):
+    __tablename__ = "pentest_phase_progress"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    assessment_id: Mapped[str] = mapped_column(
+        ForeignKey("assessments.id", ondelete="CASCADE"), index=True
+    )
+    phase: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    plugins: Mapped[list[str]] = mapped_column(JSON_VALUE, default=list, nullable=False)
+    tests_attempted: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tests_completed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    findings_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    limitations: Mapped[list[str]] = mapped_column(JSON_VALUE, default=list, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        UniqueConstraint("assessment_id", "phase", name="uq_assessment_pentest_phase"),
+    )
+
+
+class AssessmentCoverage(Base):
+    __tablename__ = "assessment_owasp_coverage"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    assessment_id: Mapped[str] = mapped_column(
+        ForeignKey("assessments.id", ondelete="CASCADE"), index=True
+    )
+    category: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    automated_checks: Mapped[list[str]] = mapped_column(JSON_VALUE, default=list, nullable=False)
+    plugins: Mapped[list[str]] = mapped_column(JSON_VALUE, default=list, nullable=False)
+    tests_attempted: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tests_completed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    findings_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    limitations: Mapped[list[str]] = mapped_column(JSON_VALUE, default=list, nullable=False)
+    manual_review_needs: Mapped[list[str]] = mapped_column(JSON_VALUE, default=list, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("assessment_id", "category", name="uq_assessment_owasp_category"),
+    )
 
 
 class Report(Base):
@@ -562,6 +626,29 @@ class AttackPathImpact(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     severity: Mapped[str] = mapped_column(String(32), nullable=False)
     confidence: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class PostExploitationStep(Base):
+    __tablename__ = "post_exploitation_steps"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    assessment_id: Mapped[str] = mapped_column(
+        ForeignKey("assessments.id", ondelete="CASCADE"), index=True
+    )
+    attack_path_id: Mapped[str] = mapped_column(
+        ForeignKey("attack_paths.id", ondelete="CASCADE"), index=True
+    )
+    source_finding_id: Mapped[str | None] = mapped_column(
+        ForeignKey("findings.id", ondelete="SET NULL"), index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    capability: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    classification: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    confidence: Mapped[str] = mapped_column(String(32), nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    technical_impact: Mapped[str | None] = mapped_column(Text)
+    business_impact: Mapped[str | None] = mapped_column(Text)
 
 
 class ManualReviewItem(Base, TimestampMixin):

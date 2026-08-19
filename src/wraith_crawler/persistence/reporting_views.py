@@ -66,18 +66,18 @@ VIEW_DEFINITIONS: dict[str, str] = {
         GROUP BY date_trunc('day', h.changed_at)::date, h.application_id, h.status
     """,
     "vw_owasp_coverage": """
-        SELECT f.assessment_id, f.application_id, owasp_category,
-               COUNT(DISTINCT f.id) AS findings,
-               COUNT(DISTINCT f.id) FILTER (WHERE f.validation_status = 'confirmed') AS confirmed_findings
-        FROM findings f
-        CROSS JOIN LATERAL jsonb_array_elements_text(f.owasp::jsonb) AS owasp_category
-        WHERE f.false_positive = FALSE
-        GROUP BY f.assessment_id, f.application_id, owasp_category
+        SELECT c.assessment_id, a.application_id, c.category AS owasp_category,
+               c.name, c.status, c.automated_checks, c.plugins,
+               c.tests_attempted, c.tests_completed, c.findings_count AS findings,
+               c.limitations, c.manual_review_needs
+        FROM assessment_owasp_coverage c
+        JOIN assessments a ON a.id = c.assessment_id
     """,
     "vw_technology_inventory": """
         SELECT t.id AS technology_id, t.assessment_id, t.application_id, t.product,
                t.version, t.category, t.confidence, t.source_plugin, t.eol_state,
-               t.first_seen, t.last_seen
+               t.eol_date, t.supported, t.lifecycle_source, t.lifecycle_evidence,
+               t.vulnerability_data, t.first_seen, t.last_seen
         FROM technologies t
     """,
     "vw_vulnerable_components": """
@@ -89,9 +89,26 @@ VIEW_DEFINITIONS: dict[str, str] = {
     """,
     "vw_plugin_health": """
         SELECT p.id AS plugin_execution_id, p.assessment_id, p.plugin_name, p.state,
-               p.failure_reason, p.started_at, p.completed_at, p.duration_ms,
-               p.tool_path, p.tool_version
+               p.phase, p.security_question, p.failure_reason, p.started_at,
+               p.completed_at, p.duration_ms, p.tool_path, p.tool_version,
+               p.tests_attempted, p.tests_completed, p.targets_tested,
+               p.findings_count, p.skip_reason
         FROM plugin_executions p
+    """,
+    "vw_pentest_phases": """
+        SELECT p.id AS phase_progress_id, p.assessment_id, a.application_id,
+               p.phase, p.sequence, p.status, p.started_at, p.completed_at,
+               p.plugins, p.tests_attempted, p.tests_completed,
+               p.findings_count, p.limitations, p.summary
+        FROM pentest_phase_progress p
+        JOIN assessments a ON a.id = p.assessment_id
+    """,
+    "vw_reconnaissance": """
+        SELECT a.id AS asset_id, a.assessment_id, a.application_id, a.url,
+               a.origin, a.scheme, a.hostname, a.port, a.resolved_ips, a.cname,
+               a.http_status, a.redirect_chain, a.title, a.server, a.cdn_waf,
+               a.tls_details, a.discovery_sources
+        FROM assets a
     """,
     "vw_attack_paths": """
         SELECT ap.id AS attack_path_id, ap.assessment_id, ap.application_id, ap.title,
@@ -114,6 +131,14 @@ VIEW_DEFINITIONS: dict[str, str] = {
                f.finding_type, f.title, f.severity, f.priority_level, f.validation_status
         FROM attack_path_findings apf
         JOIN findings f ON f.id = apf.finding_id
+    """,
+    "vw_post_exploitation_steps": """
+        SELECT p.id AS post_exploitation_step_id, p.assessment_id,
+               ap.application_id, p.attack_path_id, p.source_finding_id,
+               p.sequence, p.action, p.capability, p.classification,
+               p.confidence, p.rationale, p.technical_impact, p.business_impact
+        FROM post_exploitation_steps p
+        JOIN attack_paths ap ON ap.id = p.attack_path_id
     """,
     "vw_manual_review_queue": """
         SELECT m.id AS review_id, m.assessment_id, m.application_id, m.finding_id,

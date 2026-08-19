@@ -75,6 +75,7 @@ class CoverageHistoryPlugin(AssessmentPlugin):
                     severity=Severity.LOW,
                     confidence=Confidence.CONFIRMED,
                     validation_status=ValidationStatus.CONFIRMED,
+                    evidence=[EvidenceRecord(kind="fixture", summary="Historical fixture evidence")],
                     source_plugins=[self.name],
                     remediation="Apply the missing control",
                 )

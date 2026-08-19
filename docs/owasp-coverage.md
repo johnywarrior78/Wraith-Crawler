@@ -1,6 +1,6 @@
 # OWASP Coverage
 
-`coverage.py` is the machine-readable OWASP Top 10 matrix. The API exposes it at `/api/v1/owasp-coverage` and the CLI prints it with `wraith-crawler coverage`.
+`coverage.py` defines the machine-readable OWASP Top 10 capability matrix. The API exposes the general matrix at `/api/v1/owasp-coverage`, the CLI prints it with `wraith-crawler coverage`, and `/api/v1/assessments/{id}/owasp-coverage` returns the persisted scan-specific result.
 
 - A01: IDOR/BOLA candidates, anonymous surfaces, management/API/auth discovery.
 - A02: TLS, transport, session-cookie controls, and secret exposure.
@@ -13,4 +13,4 @@
 - A09: normally not externally verifiable; manual assessment unless direct evidence exists.
 - A10: SSRF candidate identification; no internal network probe without separate authorization.
 
-Each row states CWE mappings, automation level, validation strength, and the unauthenticated external limitation. Coverage indicates assessment capability, not proof that an application is secure.
+Each assessment row records the plugins actually selected, tests attempted and completed, findings, execution-derived status, limitations, and manual-review needs. A blocked, missing, failed, or timed-out plugin therefore cannot silently appear as complete. Coverage indicates assessment capability, not proof that an application is secure.

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from . import __version__
 from .config import AppConfig, load_config
 from .coverage import coverage_matrix
 from .domain import TargetInput
@@ -19,6 +20,7 @@ from .persistence.database import Database
 from .persistence.models import (
     Application,
     Assessment,
+    AssessmentCoverage,
     Asset,
     AttackPath,
     AttackPathEdge,
@@ -27,7 +29,9 @@ from .persistence.models import (
     Evidence,
     Finding,
     ManualReviewItem,
+    PentestPhaseProgress,
     PluginExecution,
+    PostExploitationStep,
     Report,
     Role,
     ScanMetric,
@@ -83,7 +87,7 @@ def create_app(config: AppConfig | None = None, database: Database | None = None
     auth = AuthService(config.session_ttl_minutes)
     app = FastAPI(
         title="Wraith Crawler API",
-        version="0.1.0",
+        version=__version__,
         description="Evidence-first external web application security assessment API",
     )
     if config.allowed_origins:
@@ -306,6 +310,14 @@ def create_app(config: AppConfig | None = None, database: Database | None = None
             "findings": session.scalar(select(func.count()).select_from(Finding).where(Finding.assessment_id == assessment_id)),
             "attack_paths": session.scalar(select(func.count()).select_from(AttackPath).where(AttackPath.assessment_id == assessment_id)),
         }
+        payload["pentest_phases"] = [
+            self_serialize(phase)
+            for phase in session.scalars(
+                select(PentestPhaseProgress)
+                .where(PentestPhaseProgress.assessment_id == assessment_id)
+                .order_by(PentestPhaseProgress.sequence)
+            )
+        ]
         return payload
 
     def assessment_rows(model: Any, assessment_id: str, session: Session) -> list[dict[str, Any]]:
@@ -322,6 +334,31 @@ def create_app(config: AppConfig | None = None, database: Database | None = None
     @app.get("/api/v1/assessments/{assessment_id}/technologies")
     def technologies(assessment_id: str, session: Annotated[Session, Depends(db_session)], _user: Annotated[User, Depends(current_user)]) -> list[dict[str, Any]]:
         return assessment_rows(Technology, assessment_id, session)
+
+    @app.get("/api/v1/assessments/{assessment_id}/reconnaissance")
+    def reconnaissance(assessment_id: str, session: Annotated[Session, Depends(db_session)], _user: Annotated[User, Depends(current_user)]) -> dict[str, Any]:
+        return {
+            "assets": assessment_rows(Asset, assessment_id, session),
+            "technologies": assessment_rows(Technology, assessment_id, session),
+        }
+
+    @app.get("/api/v1/assessments/{assessment_id}/pentest-phases")
+    def pentest_phases(assessment_id: str, session: Annotated[Session, Depends(db_session)], _user: Annotated[User, Depends(current_user)]) -> list[dict[str, Any]]:
+        rows = session.scalars(
+            select(PentestPhaseProgress)
+            .where(PentestPhaseProgress.assessment_id == assessment_id)
+            .order_by(PentestPhaseProgress.sequence)
+        )
+        return [self_serialize(row) for row in rows]
+
+    @app.get("/api/v1/assessments/{assessment_id}/owasp-coverage")
+    def assessment_owasp_coverage(assessment_id: str, session: Annotated[Session, Depends(db_session)], _user: Annotated[User, Depends(current_user)]) -> list[dict[str, Any]]:
+        rows = session.scalars(
+            select(AssessmentCoverage)
+            .where(AssessmentCoverage.assessment_id == assessment_id)
+            .order_by(AssessmentCoverage.category)
+        )
+        return [self_serialize(row) for row in rows]
 
     @app.get("/api/v1/assessments/{assessment_id}/findings")
     def findings(
@@ -355,7 +392,24 @@ def create_app(config: AppConfig | None = None, database: Database | None = None
         payload = self_serialize(path)
         payload["nodes"] = [self_serialize(row) for row in session.scalars(select(AttackPathNode).where(AttackPathNode.attack_path_id == path_id))]
         payload["edges"] = [self_serialize(row) for row in session.scalars(select(AttackPathEdge).where(AttackPathEdge.attack_path_id == path_id))]
+        payload["post_exploitation_steps"] = [
+            self_serialize(row)
+            for row in session.scalars(
+                select(PostExploitationStep)
+                .where(PostExploitationStep.attack_path_id == path_id)
+                .order_by(PostExploitationStep.sequence)
+            )
+        ]
         return payload
+
+    @app.get("/api/v1/assessments/{assessment_id}/post-exploitation")
+    def post_exploitation(assessment_id: str, session: Annotated[Session, Depends(db_session)], _user: Annotated[User, Depends(current_user)]) -> list[dict[str, Any]]:
+        rows = session.scalars(
+            select(PostExploitationStep)
+            .where(PostExploitationStep.assessment_id == assessment_id)
+            .order_by(PostExploitationStep.attack_path_id, PostExploitationStep.sequence)
+        )
+        return [self_serialize(row) for row in rows]
 
     @app.get("/api/v1/manual-review")
     def manual_review(
@@ -396,6 +450,9 @@ def create_app(config: AppConfig | None = None, database: Database | None = None
                 "owasp": plugin.owasp,
                 "cwe": plugin.cwe,
                 "external_tool": plugin.external_tool,
+                "phase": plugin.phase.value,
+                "stage": plugin.stage,
+                "security_question": plugin.security_question,
             }
             for plugin in engine.registry.all()
         ]
